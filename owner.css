@@ -89,6 +89,16 @@ ol{list-style:none}
 .note p{overflow-wrap:anywhere}
 .answer{white-space:pre-wrap;background:var(--w06);border:1px solid var(--hair);border-radius:12px;padding:10px 12px;font-size:14px;-webkit-user-select:text;user-select:text}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips.mid{justify-content:center}
+/* How a person is doing: one dot, the same six colours in the row and the tally. */
+.dot{flex:none;display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--muted)}
+.chip .dot{width:8px;height:8px}
+.dot.s-blocked{background:var(--red)}
+.dot.s-slipping{background:var(--orange)}
+.dot.s-quiet{background:var(--muted)}
+.dot.s-new{background:hsl(200 80% 66%)}
+.dot.s-steady{background:var(--fg)}
+.dot.s-thriving{background:var(--stat)}
 .chip.on{border-color:hsla(35,85%,60%,.55);color:var(--amber);background:hsla(35,85%,60%,.1)}
 .chip.gold{border-color:rgba(253,224,71,.5);color:var(--stat);background:rgba(133,77,14,.25)}
 /* a button that is switched on */

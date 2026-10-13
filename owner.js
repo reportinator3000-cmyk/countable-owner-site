@@ -50,6 +50,14 @@
 // built and taken out on his word the same day: a page that can hand work to
 // a session with a shell is a road into the Mac.)
 //
+// THE PEOPLE (owner, Oct 13 2026: "i dont see any information about 'People'
+// or the copy invite link like your mock up"). One more read
+// (owner_people_read): each account's name, plan, when it last opened the
+// app, this week's planned and done days, and how many texts went each way.
+// COUNTS ONLY: nobody's messages, numbers or addresses are read or shown.
+// The read comes after the list and never in its way. The invite link comes
+// with it from the database; it is not written in this public file.
+//
 // TWO HANDS, ONE ROW. A session on the Mac can change an item while it is open
 // here. A save says when this page last saw the row; if the row has changed,
 // the database refuses, the page reads the row again, keeps what was typed
@@ -238,7 +246,8 @@
     sec: {}, fopen: {}, showDone: false, showGone: false, showSeen: false,
     asked: {},                 // the id of a top-up still in the air, so a second tap counts once
     sending: false,            // the database is being asked about this sign-in (and, on a new device, to email the code)
-    codeSent: false            // a code was emailed for this sign-in: show the box to type it in
+    codeSent: false,           // a code was emailed for this sign-in: show the box to type it in
+    people: null               // the people and the invite link, read after the list (null = not read yet)
   };
   try { S.sec = JSON.parse(readStore(OPEN) || '{}') || {}; } catch (e) { S.sec = {}; }
   var stack = [];
@@ -327,13 +336,13 @@
   // in an open sheet is kept by whoever called this (S.pending).
   function needSecond() {
     var first = S.stage !== 'second';
-    S.list = null; S.stage = 'second'; S.busy = false;
+    S.list = null; S.people = null; S.stage = 'second'; S.busy = false;
     stack.length = 0; drawSheet();
     if (first) { S.codeSent = false; say(''); drawPage(); secondStart(); } else drawPage();
   }
   // The session is over. Anything being typed is kept and comes back after signing in.
   function signedOut(text) {
-    keepSession(null); S.list = null; S.stage = 'signin'; S.busy = false;
+    keepSession(null); S.list = null; S.people = null; S.stage = 'signin'; S.busy = false;
     say(text || 'You are signed out. Sign in again.', 'warn');
     stack.length = 0; drawSheet(); drawPage();
   }
@@ -409,6 +418,88 @@
       '<div class="pair"><button class="btn amber" data-act="topup">I topped up</button><button class="btn" data-act="tripwire">Tripwire</button></div>' +
       '<button class="link" data-act="balance">The billing page says a different number</button></section>';
   }
+
+  /* ---------- the people ---------- */
+  // Whole calendar days from one day to another (both are the database's
+  // Eastern dates, so "yesterday" means the same thing here and there).
+  var dayNum = function (iso) { var d = fromIso(iso); return Math.round(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000); };
+  function daysBetween(fromDay, toDay) { return dayNum(toDay) - dayNum(fromDay); }
+  function agoWords(n) { return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n + ' days ago'; }
+  // HOW IT IS GOING, from what the tables say and nothing else. The first rule
+  // that fits wins:
+  //   on hold    the app has stopped texting them (a carrier refused a text)
+  //   new        not set up yet, or joined in the last 7 days
+  //   quiet      has not opened the app for 7 days or more (or ever)
+  //   on track   every planned day of this week is done
+  //   slipping   under half of this week's planned days done AND away 3 days or more
+  //   steady     everyone else
+  var ORDER = ['blocked', 'slipping', 'quiet', 'new', 'steady', 'thriving'];
+  var STATUS_WORDS = { blocked: 'On hold', slipping: 'Slipping', quiet: 'Quiet', new: 'New', steady: 'Steady', thriving: 'On track' };
+  function personStatus(p, today) {
+    var joined = daysBetween(text(p.joined_at).slice(0, 10), today);
+    var away = p.last_active ? daysBetween(p.last_active, today) : null;
+    if (p.texts_paused) return 'blocked';
+    if (!p.setup_done || joined <= 7) return 'new';
+    if (away === null || away >= 7) return 'quiet';
+    if (p.week_planned >= 1 && p.week_done >= p.week_planned) return 'thriving';
+    if (p.week_planned >= 2 && p.week_done * 2 < p.week_planned && away >= 3) return 'slipping';
+    return 'steady';
+  }
+  function personLine(p, today) {
+    var away = p.last_active ? daysBetween(p.last_active, today) : null;
+    var opened = away === null ? 'Has not opened the app yet.' : 'Opened ' + agoWords(away) + '.';
+    if (p.texts_paused) return 'Texts on hold. ' + opened;
+    if (!p.setup_done) return 'Setup not finished. ' + opened;
+    return (p.week_planned > 0 ? p.week_done + ' of ' + p.week_planned + ' this week. ' : 'No plan this week. ') + opened;
+  }
+  var TIERS = { free: 'Free', basic: 'Basic', premium: 'Premium' };
+  var PLAN_FROM = { test: 'tester', trial: 'trial', promo: 'code' };
+  var SMS_WORDS = { opted_in: 'On', verified_sms_off: 'Off', phone_unverified: 'Number not confirmed', phone_missing: 'No number', opted_out: 'Said STOP' };
+  function textsWord(p) { return p.texts_paused ? 'On hold' : (SMS_WORDS[p.sms_status] || text(p.sms_status) || 'Not known'); }
+  function personName(p) { return (p.name || 'No name yet') + (p.you ? ' (you)' : ''); }
+
+  // Read after the list, and never in its way: if this read fails the page
+  // still shows the list, and says the people could not be read.
+  var peopleTurn = 0;
+  function loadPeople() {
+    var mine = gen, turn = ++peopleTurn;
+    rpc('owner_people_read', {}).then(function (r) {
+      if (mine !== gen || turn !== peopleTurn) return;      // signed out, or a newer read is in the air
+      if (r.ok && r.data && r.data.people) S.people = r.data;
+      else if (!S.people) S.people = { failed: true, missing: r.status === 404 };
+      if (S.stage === 'list') drawPage();
+    });
+  }
+  function viewPeople() {
+    var P = S.people;
+    if (!P || P.missing) return '';
+    if (P.failed) return '<section class="card"><h2 class="card-title">People</h2><p class="fine center">The people could not be read just now. The list below is not affected.</p></section>';
+    var today = text(P.today), counts = {};
+    var rows = P.people.map(function (p, i) { return { p: p, s: personStatus(p, today), i: i }; });
+    rows.sort(function (a, b) { return (ORDER.indexOf(a.s) - ORDER.indexOf(b.s)) || (a.i - b.i); });
+    rows.forEach(function (x) { counts[x.s] = (counts[x.s] || 0) + 1; });
+    var tally = ORDER.filter(function (k) { return counts[k]; }).map(function (k) {
+      return '<span class="chip"><i class="dot s-' + k + '"></i>' + counts[k] + ' ' + STATUS_WORDS[k] + '</span>';
+    }).join('');
+    var list = rows.map(function (x) {
+      var q = x.p;
+      return '<button class="row" data-act="person" data-id="' + esc(q.id) + '"><i class="dot s-' + x.s + '"></i><span class="grow"><b>' + esc(personName(q)) + '</b><small>' + esc(personLine(q, today)) + '</small></span>' +
+        '<span class="chip' + (q.tier === 'premium' ? ' gold' : '') + '">' + esc(TIERS[q.tier] || text(q.tier)) + '</span><i class="chev"></i></button>';
+    }).join('');
+    return '<section class="card"><h2 class="card-title">People · ' + P.people.length + '</h2>' +
+      (tally ? '<div class="chips mid">' + tally + '</div>' : '') +
+      (list ? '<div class="list">' + list + '</div>' : '<p class="fine center">Nobody has an account yet.</p>') +
+      '<p class="fine center">How each person is doing, by the numbers. Nobody’s messages are shown here.</p></section>';
+  }
+  function viewInvite() {
+    var inv = S.people && S.people.invite;
+    if (!inv || !inv.link) return '';
+    return '<section class="card"><h2 class="card-title">Add a tester</h2>' +
+      '<p class="fine center">Send a friend this link. They install the app and sign in with their own mobile number. You enter nothing.' +
+      (inv.cap ? ' The link lets in ' + esc(inv.cap) + ' people in all.' : '') + '</p>' +
+      '<button class="btn wide" data-act="invite">Copy invite link</button></section>';
+  }
+
   function viewList() {
     var L = S.list;
     var due = L.followups.filter(function (f) { return daysUntil(f.check_on) <= 0; }).length;
@@ -446,7 +537,7 @@
       }).join('') + '</div>';
     }
     return '' +
-      viewToday() + viewMoney() +
+      viewToday() + viewMoney() + viewPeople() + viewInvite() +
       '<h1 class="day">The list <span>' + L.items.length + ' open · ' + L.followups.length + ' to chase' + (due ? ' · ' + due + ' due' : '') + '</span></h1>' +
       '<section class="card' + (due ? ' verdict' : '') + '"><h2 class="card-title">Follow-ups · ' + L.followups.length + '</h2>' +
         '<p class="fine center">Things to chase on a day. On that day it turns red here.</p>' +
@@ -581,6 +672,42 @@
         '<label class="field" for="twire"><span class="micro muted">Dollars a day</span><input class="well code" id="twire" inputmode="decimal" placeholder="5.00" value="' + esc(m.tripwire_usd === null || m.tripwire_usd === undefined ? '' : m.tripwire_usd) + '"></label>' +
         '<div class="pair">' + cancel + '<button class="btn amber" data-act="tripwirego">Save</button></div>') };
     },
+    // One person, read only. Everything here came from owner_people_read.
+    person: function (a) {
+      var P = S.people, q = P && P.people ? P.people.filter(function (x) { return x.id === a.id; })[0] : null;
+      if (!q) return null;
+      var today = text(P.today), st = personStatus(q, today);
+      var kv = function (k, v) { return '<div class="kv"><span>' + esc(k) + '</span><b>' + esc(v) + '</b></div>'; };
+      var plan = (TIERS[q.tier] || text(q.tier)) + (PLAN_FROM[q.plan_source] ? ' \u00b7 ' + PLAN_FROM[q.plan_source] : '');
+      var left = Math.max(0, (q.credit_granted_cents || 0) - (q.ai_spent_cents || 0));
+      return { full: true, html: '<div class="sheet swap" role="dialog" aria-modal="true" aria-label="Person">' +
+        '<h2 class="name">' + esc(personName(q)) + '</h2>' +
+        '<div class="chips"><span class="chip"><i class="dot s-' + st + '"></i>' + STATUS_WORDS[st] + '</span></div>' +
+        '<p class="fine">' + esc(personLine(q, today)) + '</p>' +
+        '<div class="list">' +
+          kv('This week', q.week_planned > 0 ? q.week_done + ' of ' + q.week_planned + ' planned days' : 'no plan') +
+          kv('Last opened', q.last_active ? agoWords(daysBetween(q.last_active, today)) : 'never') +
+          kv('Days opened, last 7', text(q.active_days_7)) +
+          kv('Joined', day(new Date(q.joined_at))) +
+          kv('Plan', plan) + (q.plan_until ? kv('Plan runs to', day(new Date(q.plan_until))) : '') +
+          kv('Texts', textsWord(q)) +
+          kv('Texts, last 7 days', q.texts_out_7d + ' from the coach \u00b7 ' + q.texts_in_7d + ' from them') +
+          kv('AI cost, last 7 days', usd((q.ai_spent_7d_cents || 0) / 100)) +
+          kv('AI cost, all time', usd((q.ai_spent_cents || 0) / 100)) +
+          (q.credit_granted_cents ? kv('AI credit given', usd(q.credit_granted_cents / 100)) + kv('Credit left', usd(left / 100)) : '') +
+          kv('Teams', (q.teams || []).length ? q.teams.join(', ') : 'none') +
+        '</div>' +
+        '<p class="fine">Their messages are not shown here.</p>' +
+        '<button class="btn wide" data-act="close">Close</button></div>' };
+    },
+    // Copying was refused by the browser: show the link to press and hold.
+    invitelink: function () {
+      var inv = S.people && S.people.invite;
+      if (!inv || !inv.link) return null;
+      return { html: pop('Invite link', 'Copying was refused here. Press and hold the link to copy it.',
+        '<label class="field" for="linktext"><input class="well" id="linktext" readonly value="' + esc(inv.link) + '"></label>' +
+        '<button class="btn" data-act="close">Close</button>') };
+    },
     signout: function () {
       return { html: pop('Sign out?', 'You will need a texted code to open this page again on this device.',
         '<div class="pair">' + cancel + '<button class="btn red" data-act="signoutgo">Sign out</button></div>' +
@@ -651,6 +778,7 @@
       if (mine !== gen) return r;              // signed out while this was in the air: draw nothing
       if (r.ok && r.data && r.data.sections) {
         S.list = r.data; S.asOf = new Date(); S.stage = 'list';
+        loadPeople();
         // Typing that was kept across a sign-out comes back.
         if (S.pending) { var kept = S.pending; S.pending = null; stack.length = 0; stack.push(kept); drawSheet(); }
       } else if (r.status === 401) {
@@ -821,7 +949,7 @@
     signoutgo: function (d) {
       var token = session && session.access_token, everywhere = !!(d && d.all);
       gen++;                                   // every call still in the air is now too late to matter
-      keepSession(null); S.list = null; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
+      keepSession(null); S.list = null; S.people = null; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
       stack.length = 0; drawSheet(); drawPage();
       if (!token) return;
       // First the database forgets that this sign-in passed (or, for every
@@ -895,6 +1023,16 @@
     fnotify: function (d, el) {
       var on = !d.on;
       change(el, 'owner_followup_notify', { _id: d.id, _on: on }, on ? 'You will get an email that morning' : 'No email for this one');
+    },
+
+    // A person, and the link to hand a friend.
+    person: function (d) { openSheet('person', { id: d.id }); },
+    invite: function () {
+      var inv = S.people && S.people.invite;
+      if (!inv || !inv.link) return;
+      try {
+        navigator.clipboard.writeText(inv.link).then(function () { toast('Invite link copied'); }, function () { openSheet('invitelink'); });
+      } catch (e) { openSheet('invitelink'); }
     },
 
     // An alarm, seen.
