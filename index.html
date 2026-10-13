@@ -2,12 +2,37 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <!-- The page's own policy. Nothing loads or runs here unless it is one of
+       this page's own files, and the page may talk to one place only: the
+       CountAble project. No inline script, no inline style, no other site. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https://kqvcpcxcmgafbhjdjnak.supabase.co; base-uri 'none'; form-action 'none'" />
   <meta name="robots" content="noindex, nofollow, noarchive" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Owner" />
+  <meta name="theme-color" content="#171c26" />
   <title>CountAble Owner</title>
+  <link rel="stylesheet" href="owner.css?v=1" />
 </head>
 <body>
-  <p>Not open yet.</p>
+  <div class="wrap">
+    <header class="top">
+      <div class="who">
+        <b>CountAble · Owner</b>
+        <span class="micro" id="asof">Private</span>
+      </div>
+      <button class="btn small" id="refresh" data-act="refresh" hidden>Refresh</button>
+    </header>
+    <main class="view" id="view">
+      <p class="fine center">Opening.</p>
+    </main>
+    <noscript><p class="fine center">This page needs JavaScript turned on.</p></noscript>
+  </div>
+  <div id="sheet" hidden></div>
+  <div class="toast" id="toast" hidden role="status" aria-live="polite"></div>
+  <script src="owner.js?v=1"></script>
 </body>
 </html>

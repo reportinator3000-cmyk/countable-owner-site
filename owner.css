@@ -1,0 +1,172 @@
+/* THE OWNER PAGE (owner.getcountable.app). The app's own look, on a web page:
+   the sunset photograph behind everything, black-glass cards, amber for the
+   one action that matters, capital micro-labels, the iOS system font only,
+   and the app's slow pacing (sheets arrive in 1500ms and leave in 800ms).
+   Tokens follow countable-app/src/theme/tokens.ts and the site's style.css.
+
+   No inline style is used anywhere on the page, so the page's policy can
+   refuse them all. */
+:root{
+  color-scheme:dark;
+  --bg:hsl(220 25% 12%);
+  --fg:hsl(40 50% 95%);
+  --amber:hsl(35 85% 60%);
+  --orange:hsl(25 90% 58%);
+  --red:hsl(0 82% 64%);
+  --muted:hsl(215 15% 68%);
+  --stat:#FEF08A;
+  --ink:hsl(220 30% 10%);
+  --w80:rgba(255,255,255,.8);
+  --w70:rgba(255,255,255,.7);
+  --w60:rgba(255,255,255,.6);
+  --w10:rgba(255,255,255,.1);
+  --w06:rgba(255,255,255,.06);
+  --glass:rgba(0,0,0,.28);
+  --glass-strong:rgba(0,0,0,.7);
+  --line:rgba(255,255,255,.15);
+  --hair:rgba(255,255,255,.1);
+  --well:hsla(220,25%,12%,.55);
+  --well-line:rgba(255,255,255,.35);
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;
+  --in:1500ms; --out:800ms;
+  --ease:cubic-bezier(.3,.62,.4,1);
+}
+@media (prefers-reduced-motion:reduce){
+  :root{--in:1ms;--out:1ms}
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+/* html keeps NO background of its own: the body's colour must reach the canvas,
+   or it would paint over the photograph's two layers. */
+html.locked{overflow:hidden}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--fg);font:15px/1.45 var(--font);-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%}
+/* The photograph and its scrim, as two fixed layers (iOS Safari drops
+   background-attachment:fixed). */
+body::before,body::after{content:"";position:fixed;inset:0;pointer-events:none}
+body::before{background:var(--bg) url("sky.jpg") 50% 38% / cover no-repeat;z-index:-2}
+body::after{background:linear-gradient(rgba(0,0,0,.2),rgba(0,0,0,.1),rgba(0,0,0,.4));z-index:-1}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit;-webkit-tap-highlight-color:transparent}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:8px}
+h1,h2,p,ol{margin:0;padding:0}
+ol{list-style:none}
+
+.wrap{max-width:512px;margin:0 auto;padding-inline:16px;padding-block:calc(18px + env(safe-area-inset-top,0px)) calc(48px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:16px}
+.view{display:flex;flex-direction:column;gap:16px;min-width:0}
+
+/* type */
+.micro{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}
+.muted{color:var(--muted)}
+.fine{font-size:13px;line-height:1.4;color:var(--w70)}
+.center{text-align:center}
+.day{font-size:17px;font-weight:900;letter-spacing:.04em;text-transform:uppercase;color:var(--amber);text-shadow:0 1px 4px rgba(0,0,0,.6);display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.day span{font-size:13px;font-weight:700;color:var(--w80);letter-spacing:.08em}
+.num{font-variant-numeric:tabular-nums}
+.msg-line{font-size:14px;font-weight:700;text-align:center;color:var(--w80)}
+.msg-line.warn{color:var(--orange)}
+
+/* header */
+.top{display:flex;align-items:center;gap:10px;min-width:0}
+.top .who{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;text-shadow:0 1px 4px rgba(0,0,0,.6)}
+.top .who b{font-size:13px;font-weight:800;letter-spacing:1px;text-transform:uppercase}
+
+/* cards */
+.card{background:var(--glass);border:1px solid var(--line);border-radius:16px;-webkit-backdrop-filter:blur(24px) saturate(1.5);backdrop-filter:blur(24px) saturate(1.5);padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.card.verdict{border-color:hsla(35,85%,60%,.55);box-shadow:0 0 18px hsla(35,85%,60%,.28),0 0 44px hsla(35,85%,60%,.1)}
+.card-title{font-size:15px;font-weight:700;letter-spacing:1px;text-transform:uppercase;text-align:center;text-wrap:balance}
+
+/* the one big line of a card: what it comes to */
+.stat{font-size:26px;line-height:1.1;font-weight:900;letter-spacing:.05em;text-transform:uppercase;color:var(--stat);text-align:center;text-wrap:balance;font-variant-numeric:tabular-nums}
+.stat.calm{color:var(--fg)}
+.kv{display:flex;justify-content:space-between;gap:12px;align-items:baseline;padding:9px 0;min-width:0}
+.kv + .kv{border-top:1px solid var(--hair)}
+.kv span{color:var(--w80);min-width:0}
+.kv b{font-weight:700;font-variant-numeric:tabular-nums;text-align:right;min-width:0}
+.kv b.hot{color:var(--orange)}
+.three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.box{border:1px solid var(--line);border-radius:14px;background:var(--glass);padding:12px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.note{display:flex;flex-direction:column;gap:8px;padding:12px 0}
+.note + .note{border-top:1px solid var(--hair)}
+.note p{overflow-wrap:anywhere}
+.answer{white-space:pre-wrap;background:var(--w06);border:1px solid var(--hair);border-radius:12px;padding:10px 12px;font-size:14px;-webkit-user-select:text;user-select:text}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip.on{border-color:hsla(35,85%,60%,.55);color:var(--amber);background:hsla(35,85%,60%,.1)}
+.chip.gold{border-color:rgba(253,224,71,.5);color:var(--stat);background:rgba(133,77,14,.25)}
+/* a button that is switched on */
+.btn.on{border-color:hsla(42,95%,80%,.75);color:var(--amber)}
+
+/* lists */
+.list{display:flex;flex-direction:column;min-width:0}
+.row{display:flex;align-items:center;gap:12px;min-width:0;padding:12px 0;width:100%}
+.row + .row{border-top:1px solid var(--hair)}
+.row > .btn{flex:none}
+.grow{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.grow b{font-size:15px;font-weight:700;overflow-wrap:anywhere}
+.grow small{font-size:13px;line-height:1.35;color:var(--w70);overflow-wrap:anywhere}
+.chev{flex:none;width:8px;height:8px;border-right:2px solid var(--w60);border-top:2px solid var(--w60);transform:rotate(45deg);margin-right:4px}
+
+/* chips */
+.chip{display:inline-flex;align-items:center;gap:6px;min-height:24px;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;border:1px solid var(--line);background:var(--w06);color:var(--w80);white-space:nowrap;flex:none}
+.chip.warn{border-color:hsla(25,90%,58%,.65);color:var(--orange);background:hsla(25,90%,55%,.12)}
+.chip.bad{border-color:hsla(0,82%,64%,.65);color:var(--red);background:hsla(0,80%,55%,.14)}
+
+/* buttons: the app's glass family (smoke, amber, red), equal halves in a pair */
+.btn{height:48px;border-radius:14px;padding:0 14px;font-size:15px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid rgba(255,255,255,.38);box-shadow:0 3px 16px rgba(0,0,0,.5);white-space:nowrap;text-align:center;color:#fff;
+  background:linear-gradient(180deg,rgba(255,255,255,.16),rgba(30,38,54,.05) 45%,rgba(0,0,0,.26)),hsla(220,18%,34%,.62)}
+.btn.amber{color:var(--ink);border-color:hsla(42,95%,80%,.75);background:linear-gradient(180deg,rgba(255,255,255,.34),rgba(255,255,255,.02) 45%,rgba(0,0,0,.2)),hsla(35,85%,58%,.94)}
+.btn.red{border-color:hsla(0,90%,78%,.55);background:linear-gradient(180deg,rgba(255,255,255,.2),rgba(255,255,255,.02) 45%,rgba(0,0,0,.26)),hsla(0,72%,46%,.88)}
+.btn.small{height:38px;border-radius:11px;font-size:11px;letter-spacing:.1em;padding:0 10px;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+.btn.wide{width:100%}
+.btn[disabled]{opacity:.5;cursor:default}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.acts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.link{font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--w70);text-decoration:underline;text-underline-offset:3px;align-self:center;padding:8px 6px;text-shadow:0 1px 4px rgba(0,0,0,.6)}
+
+/* inputs read as inputs: a dark well with a bright edge; 16px so iOS does not zoom */
+.well{width:100%;background:var(--well);border:1.5px solid var(--well-line);border-radius:12px;color:var(--fg);font:16px/1.4 var(--font);padding:12px;margin:0}
+textarea.well{min-height:116px;resize:vertical}
+textarea.well.tall{min-height:168px}
+select.well{-webkit-appearance:none;appearance:none;padding-right:38px;background-image:linear-gradient(45deg,transparent 50%,var(--w60) 50%),linear-gradient(135deg,var(--w60) 50%,transparent 50%);background-position:calc(100% - 19px) 50%,calc(100% - 13px) 50%;background-size:6px 6px;background-repeat:no-repeat}
+input[type="date"].well{min-height:48px}
+.well::placeholder{color:var(--w60)}
+.code{font-size:26px;font-weight:800;letter-spacing:.4em;text-align:center;font-variant-numeric:tabular-nums}
+label.field{display:flex;flex-direction:column;gap:6px}
+/* a field's label is small, so it is never also faint */
+label.field .micro{color:var(--w80)}
+
+/* rows that open slowly: a follow-up, a section of the list */
+.sugs{display:flex;flex-direction:column;gap:10px}
+.sug,.grp{border:1px solid var(--line);border-radius:14px;background:rgba(0,0,0,.22);min-width:0}
+.sug.open,.grp.open{border-color:hsla(35,85%,60%,.45)}
+.sug-head{display:flex;align-items:center;gap:10px;padding:10px 10px 10px 12px;min-width:0}
+.sug-head .ttl,.grp-head .ttl{display:block;font-size:15px;line-height:1.3;font-weight:700;overflow-wrap:anywhere}
+.sug-head .ev{display:block;font-size:12px;color:var(--w70);overflow-wrap:anywhere}
+.sug-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows var(--in) var(--ease)}
+.sug.open .sug-body,.grp.open > .sug-body{grid-template-rows:1fr}
+.sug-body > div{overflow:hidden;min-height:0}
+.sug-in{padding:12px;display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--hair)}
+.sug-in p{overflow-wrap:anywhere}
+.grp-head{display:flex;align-items:center;gap:10px;padding:10px 12px;width:100%;min-width:0}
+.rank{flex:none;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:900;color:var(--ink);background:var(--stat)}
+.grp-in{padding:0 12px 8px;border-top:1px solid var(--hair)}
+.grp-in .grow span{font-size:15px;line-height:1.4;overflow-wrap:anywhere}
+.grp-in .fine{padding:12px 0 6px}
+
+/* sheets and pop-ups */
+.veil{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.55);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:center;padding:16px;animation:veilIn var(--in) var(--ease) both}
+.veil.full{align-items:flex-end;padding:0}
+.veil.still{animation:none}
+.veil.leaving{animation:veilOut var(--out) ease both}
+@keyframes veilIn{from{opacity:0}to{opacity:1}}
+@keyframes veilOut{from{opacity:1}to{opacity:0}}
+.pop{width:min(340px,100%);max-height:100%;overflow:auto;background:var(--glass-strong);border:1px solid var(--line);border-radius:16px;-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);padding:20px;display:flex;flex-direction:column;gap:14px}
+.pop h2{font-size:22px;line-height:1.15;font-weight:900;letter-spacing:1px;text-transform:uppercase;text-align:center;text-wrap:balance}
+.pop .body{font-size:16px;font-weight:700;letter-spacing:.3px;color:var(--w80);text-align:center;text-wrap:pretty;overflow-wrap:anywhere}
+.sheet{width:min(512px,100%);max-height:94%;overflow:auto;-webkit-overflow-scrolling:touch;background:rgba(8,11,17,.92);border:1px solid var(--line);border-bottom:0;border-radius:20px 20px 0 0;-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);padding:18px 16px calc(18px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:14px}
+.sheet .name{font-size:22px;font-weight:900;letter-spacing:1px;text-transform:uppercase}
+/* A sheet taller than the screen scrolls; nothing in it is squeezed to fit. */
+.sheet > *,.pop > *{flex-shrink:0}
+.swap{animation:veilIn var(--out) var(--ease) both}
+
+.toast{position:fixed;left:16px;right:16px;bottom:calc(20px + env(safe-area-inset-bottom,0px));z-index:50;display:flex;justify-content:center;pointer-events:none}
+.toast span{background:var(--glass-strong);border:1px solid var(--line);border-radius:12px;padding:10px 14px;font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);animation:veilIn var(--out) var(--ease) both;text-align:center}
+.toast.leaving span{animation:veilOut var(--out) ease both}
