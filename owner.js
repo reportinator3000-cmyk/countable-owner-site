@@ -268,7 +268,8 @@
     tab: 'home',               // home | coach; memory only
     coach: null,               // what ran and the sheet, read when the Coach tab is opened
     coachDays: 7, coachWho: null, coachIdle: false, coachAll: false,
-    pcoach: null               // ONE person's coach while their sheet is open; memory only, never stored
+    pcoach: null,              // ONE person's coach while their sheet is open; memory only, never stored
+    trace: null                // ONE write's record while its sheet is open; memory only, never stored
   };
   try { S.sec = JSON.parse(readStore(OPEN) || '{}') || {}; } catch (e) { S.sec = {}; }
   var stack = [];
@@ -357,13 +358,13 @@
   // in an open sheet is kept by whoever called this (S.pending).
   function needSecond() {
     var first = S.stage !== 'second';
-    S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetCoachTab(); S.stage = 'second'; S.busy = false;
+    S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); S.stage = 'second'; S.busy = false;
     stack.length = 0; drawSheet();
     if (first) { S.codeSent = false; say(''); drawPage(); secondStart(); } else drawPage();
   }
   // The session is over. Anything being typed is kept and comes back after signing in.
   function signedOut(text) {
-    keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetCoachTab(); S.stage = 'signin'; S.busy = false;
+    keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); S.stage = 'signin'; S.busy = false;
     say(text || 'You are signed out. Sign in again.', 'warn');
     stack.length = 0; drawSheet(); drawPage();
   }
@@ -737,6 +738,46 @@
     return head + trouble + jobsCard + recent + people + models + days;
   }
 
+  // WHY DID IT WRITE THAT (owner, Oct 13 2026). For a plan or a star write,
+  // what the model was given and what it wrote (owner_write_trace). Sizes for
+  // anyone; the words for the owner's own account only, and the database
+  // records an opening that shows them. Asked for by a tap; memory only;
+  // forgotten when its sheet closes.
+  var TRACED = { plan: true, day_rework: true };
+  var traceTurn = 0;
+  function forgetTrace() { traceTurn++; S.trace = null; }
+  function loadTrace(id) {
+    var mine = gen, turn = ++traceTurn;
+    S.trace = { id: id, loading: true };
+    drawSheet();
+    rpc('owner_write_trace', { _call: Number(id) }).then(function (r) {
+      if (mine !== gen || turn !== traceTurn) return;
+      if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
+      if (SECOND(r)) { needSecond(); return; }
+      if (r.ok && r.data && r.data.call !== undefined) S.trace = { id: id, data: r.data, open: {} };
+      else S.trace = { id: id, failed: r.status === 404 ? 'This is not switched on yet.' : textsWhy(r).replace('The texts', 'The record') };
+      drawSheet();
+    });
+  }
+  // A long message is cut where it starts a new subject: a line that begins
+  // with one of the writers' own headings, or a line in capitals. Nothing is
+  // dropped or reordered: the pieces, joined, are the message.
+  var HEADS = ['Athlete:', 'Goals & preferences:', 'Weekly challenges that MUST', 'Upcoming events to train for:', 'Apple Health device data', 'Previously APPROVED AI plans',
+    'Accumulated requests this iteration', 'Newest request', 'Current draft being remixed', 'Generate workouts for these',
+    'User\'s description of what this workout should be', 'Workout title:', 'Previous notes', 'Athlete profile:', 'Plan notes from'];
+  function isHead(line) {
+    for (var i = 0; i < HEADS.length; i++) if (line.indexOf(HEADS[i]) === 0) return true;
+    return /^(?:TIER \d|[A-Z][A-Z0-9 ,'&()-]{9,}[A-Z)](?:[:(]|\s[(—-]|$))/.test(line);
+  }
+  function traceSections(message) {
+    var lines = text(message).split('\n'), out = [], cur = null;
+    lines.forEach(function (line, i) {
+      if (!cur || isHead(line)) { cur = { head: line.slice(0, 70), lines: [] }; out.push(cur); }
+      cur.lines.push(line);
+    });
+    return out.map(function (s) { return { head: s.head, body: s.lines.join('\n') }; });
+  }
+
   // ONE PERSON'S COACH: their coach's voice and dials, the weekly reviews
   // that ran for them, and (for the owner's own account) the coach's notebook.
   // Asked for by a tap; the database records an opening that shows a notebook;
@@ -1052,8 +1093,52 @@
           (c.window_days !== null || c.window_msgs !== null ? kv('Memory of the conversation', (c.window_days !== null ? plural(c.window_days, 'day', 'days') : '') + (c.window_days !== null && c.window_msgs !== null ? ', ' : '') + (c.window_msgs !== null ? plural(c.window_msgs, 'text', 'texts') : '')) : '') +
           kv('Function', c.fn) +
         '</div>' +
+        (TRACED[c.kind] && c.outcome === 'ok' ? '<button class="btn wide" data-act="trace" data-id="' + esc(c.id) + '">What it was given and what it wrote</button>' : '') +
         '<button class="btn wide" data-act="job" data-id="' + esc(c.kind) + '">What this job is shown</button>' +
         '<p class="fine center">The log keeps sizes and costs, not the words that were sent or written.</p>' +
+        '<button class="btn wide" data-act="close">Close</button></div>' };
+    },
+    // What one plan or star write was given, and what it wrote. Read only.
+    trace: function (a) {
+      var T = S.trace;
+      if (!T || String(T.id) !== String(a.id)) return null;
+      var D = T.data, body;
+      var kv = function (k, v) { return '<div class="kv"><span>' + esc(k) + '</span><b>' + esc(v) + '</b></div>'; };
+      var partName = function (p, i, all) {
+        if (p.role === 'user') return D.writer === 'star' ? 'The day and the person' : 'The person and the week';
+        var n = all.slice(0, i + 1).filter(function (x) { return x.role === 'system'; }).length;
+        return 'Standing instructions ' + n;
+      };
+      if (D && !D.found) {
+        body = '<p class="fine center">Nothing was kept for this call. A record of what a plan or the star was given is kept from the day this was switched on, for thirty days.</p>';
+      } else if (D && !D.kept) {
+        body = '<div class="list">' + D.given.map(function (p, i, all) { return kv(partName(p, i, all), grouped(p.chars) + ' characters'); }).join('') +
+          kv('What they asked', grouped(D.asked_chars) + ' characters') + kv('What it wrote', grouped(D.wrote_chars) + ' characters') + '</div>' +
+          '<p class="fine center">Sizes only. The words are kept for your own account. The privacy policy covers a person’s account and texts, not a copy of what a model was shown about them.</p>';
+      } else if (D) {
+        var given = D.given.map(function (p, i, all) {
+          var open = !!T.open['g' + i];
+          var secs = p.role === 'user' ? traceSections(p.text) : [{ head: '', body: text(p.text) }];
+          return '<div class="grp' + (open ? ' open' : '') + '"><button class="grp-head" data-act="trsec" data-id="g' + i + '" aria-expanded="' + open + '"><span class="grow"><span class="ttl">' + esc(partName(p, i, all)) + '</span></span>' +
+            '<span class="chip num">' + esc(compact(p.chars)) + '</span></button><div class="sug-body"><div><div class="grp-in nbin">' +
+            (open ? secs.map(function (s) { return '<div class="nbk">' + (secs.length > 1 ? '<span class="micro muted">' + esc(s.head) + '</span>' : '') + '<p class="pre">' + esc(s.body) + '</p></div>'; }).join('') : '') +
+            '</div></div></div></div>';
+        }).join('');
+        var cards = Array.isArray(D.wrote) ? D.wrote : [];
+        body = (D.asked ? '<div class="nbk"><span class="micro muted">What you asked</span><p class="pre">' + esc(D.asked) + '</p></div>' : '') +
+          '<h2 class="card-title">What it was given</h2><p class="fine center">Exactly as it was sent, in order. Tap a part to read it.</p><div class="sugs">' + given + '</div>' +
+          '<h2 class="card-title">What it wrote</h2>' +
+          (cards.length ? cards.map(function (w) {
+            return '<div class="nbk"><span class="micro muted">' + esc((w.date ? day(fromIso(w.date)) + ' · ' : '') + text(w.title)) + '</span><p class="pre">' + esc(w.notes) + '</p></div>';
+          }).join('') : '<p class="fine center">Nothing was written.</p>') +
+          '<p class="fine center">This opening is on the record. Nothing here is kept on this device. It is kept in the database for thirty days.</p>';
+      } else if (T.failed) {
+        body = '<p class="msg-line warn" role="alert">' + esc(T.failed) + '</p><button class="btn wide" data-act="traceagain" data-id="' + esc(a.id) + '">Try again</button>';
+      } else {
+        body = '<p class="fine center">Reading.</p>';
+      }
+      return { full: true, html: '<div class="sheet swap" role="dialog" aria-modal="true" aria-label="What it was given">' +
+        '<h2 class="name">Why it wrote that</h2>' + body +
         '<button class="btn wide" data-act="close">Close</button></div>' };
     },
     // One person's coach. Read only.
@@ -1126,6 +1211,7 @@
     // sheet open means nobody's texts are held, whichever way it was closed.
     if (S.texts && !stack.some(function (e) { return e.kind === 'texts'; })) forgetTexts();
     if (S.pcoach && !stack.some(function (e) { return e.kind === 'pcoach'; })) forgetCoach();
+    if (S.trace && !stack.some(function (e) { return e.kind === 'trace'; })) forgetTrace();
     var top = stack.length ? stack[stack.length - 1] : null;
     var s = top && S.list ? SHEETS[top.kind](top) : null;
     if (top && !s) { stack.length = 0; top = null; }
@@ -1360,7 +1446,7 @@
     signoutgo: function (d) {
       var token = session && session.access_token, everywhere = !!(d && d.all);
       gen++;                                   // every call still in the air is now too late to matter
-      keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetCoachTab(); S.tab = 'home'; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
+      keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); S.tab = 'home'; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
       stack.length = 0; drawSheet(); drawPage();
       if (!token) return;
       // First the database forgets that this sign-in passed (or, for every
@@ -1471,6 +1557,10 @@
       el.closest('.grp').classList.toggle('open', S.pcoach.open[d.id]);
       el.setAttribute('aria-expanded', String(S.pcoach.open[d.id]));
     },
+    // What one write was given and what it wrote: asked for here, by this tap, and nowhere else.
+    trace: function (d) { if (!d.id) return; stack.push({ kind: 'trace', id: d.id }); loadTrace(d.id); },
+    traceagain: function (d) { if (S.trace && String(S.trace.id) === String(d.id) && !S.trace.loading) loadTrace(d.id); },
+    trsec: function (d) { if (!S.trace || !S.trace.open) return; S.trace.open[d.id] = !S.trace.open[d.id]; drawSheet(); },
     // From a person's coach to what ran for them.
     coachwhogo: function (d) { if (!d.id) return; S.coachWho = d.id; S.tab = 'coach'; closeAll(); loadCoach(); },
 

@@ -119,6 +119,8 @@ ul.nb li{min-width:0}
 .nbk + .nbk{border-top:1px solid var(--hair)}
 .nbk p,ul.nb p{font-size:14px;line-height:1.4;overflow-wrap:anywhere;-webkit-user-select:text;user-select:text}
 .nbin{padding:4px 12px 10px}
+/* what a model was sent, kept as it was written */
+.pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.45;-webkit-user-select:text;user-select:text}
 
 /* lists */
 .list{display:flex;flex-direction:column;min-width:0}
