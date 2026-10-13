@@ -490,6 +490,8 @@
       if (r.ok && r.data && r.data.people) S.people = r.data;
       else if (!S.people) S.people = { failed: true, missing: r.status === 404 };
       if (S.stage === 'list') drawPage();
+      // The coupons are read after the people (they name them), and only when there are people.
+      if (S.people && S.people.people) loadCoupons();
     });
   }
   function viewPeople() {
@@ -548,6 +550,108 @@
       '<p class="fine center">Send a friend this link. They install the app and sign in with their own mobile number. You enter nothing.' +
       (inv.cap ? ' The link lets in ' + esc(inv.cap) + ' people in all.' : '') + '</p>' +
       '<button class="btn wide" data-act="invite">Copy invite link</button></section>';
+  }
+
+  /* ---------- coupons ---------- */
+  // COUPONS (owner, Oct 13 2026: "make it easy for me to create, track, and
+  // send credit coupons to my testflight users"). A coupon is a code a
+  // tester types in the app (the DATA tab, COUNTABLE PLANS, Redeem a code): it
+  // becomes AI credit on THEIR account when THEY redeem it. This page makes
+  // the code and never touches anybody's plan or credit.
+  //   owner_coupons_read    the coupons, WITHOUT their codes. Read after the
+  //                         people, and never in their way.
+  //   owner_coupon_show     the code of one, asked for by a tap. The database
+  //                         records each showing. The answer lives in S.cshow
+  //                         only, and is forgotten when the sheet closes.
+  // SENT FROM HIS OWN MESSAGES: "Text it" is a link that opens a text with
+  // the words filled in. He picks the person. This page never reads, asks
+  // for or keeps anybody's number.
+  // The place, in the app's own words: the tab, the row, the section.
+  var COUPON_WHERE = 'DATA > COUNTABLE PLANS > Redeem a code';
+  var COUPON_WORDS = { unused: 'Unused', used: 'Used', ended: 'Ended', cancelled: 'Cancelled' };
+  var dollars = function (cents) { var n = (Number(cents) || 0) / 100; return '$' + (n === Math.round(n) ? String(n) : n.toFixed(2)); };
+  var couponsTurn = 0, cshowTurn = 0;
+  // Memory only, never stored: the coupons (no codes), ONE coupon's code while
+  // its sheet is open, and whether the used and ended ones are unfolded.
+  S.coupons = null; S.cshow = null; S.showCoupons = false;
+  function forgetCoupons() { couponsTurn++; S.coupons = null; }
+  // Forgetting also makes any answer still in the air too late to be shown.
+  function forgetCoupon() { cshowTurn++; S.cshow = null; }
+  function loadCoupons() {
+    var mine = gen, turn = ++couponsTurn;
+    rpc('owner_coupons_read', {}).then(function (r) {
+      if (mine !== gen || turn !== couponsTurn) return;     // signed out, or a newer read is in the air
+      if (r.ok && r.data && r.data.coupons && r.data.rules) S.coupons = r.data;
+      else if (!S.coupons) S.coupons = { failed: true, missing: r.ok || r.status === 404 };
+      if (S.stage === 'list') drawPage();
+      // An open coupon is drawn again from what is now true (sent, used, cancelled).
+      if (stack.length && stack[stack.length - 1].kind === 'coupon') drawSheet();
+    });
+  }
+  function couponWhy(r) {
+    if (r.status === 0) return 'No answer came back. Try again.';
+    if (NOT_OWNER(r)) return 'This account is not the owner.';
+    if (r.data && r.data.code === '22023' && r.data.message) return String(r.data.message);
+    return 'That did not work. Try again in a moment.';
+  }
+  function loadCouponCode(id) {
+    var mine = gen, turn = ++cshowTurn;
+    S.cshow = { id: id, loading: true };
+    drawSheet();
+    rpc('owner_coupon_show', { _id: id }).then(function (r) {
+      // Too late: the sheet was closed, the sign-in ended, or a newer read is in the air.
+      if (mine !== gen || turn !== cshowTurn) return;
+      if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
+      if (SECOND(r)) { needSecond(); return; }
+      if (r.ok && r.data && r.data.id === id) S.cshow = { id: id, data: r.data };
+      else S.cshow = { id: id, failed: couponWhy(r) };
+      drawSheet();
+    });
+  }
+  function couponOf(id) { var C = S.coupons; return C && C.coupons ? C.coupons.filter(function (x) { return x.id === id; })[0] || null : null; }
+  function couponWho(c) { return text(c.label) || text(c.for_name) || (c.by_hand ? 'Made before this page' : 'Nobody named'); }
+  function couponLine(c) {
+    if (c.state === 'used') return 'Used by ' + (text(c.used_name) || 'someone') + (c.used_at ? ' on ' + day(new Date(c.used_at)) : '');
+    if (c.state === 'cancelled') return 'Cancelled' + (c.cancelled_at ? ' ' + day(new Date(c.cancelled_at)) : '') + ', never used';
+    if (c.state === 'ended') return 'Ended' + (c.ends_at ? ' ' + day(new Date(c.ends_at)) : '') + ', never used';
+    // One made by hand before the page may have been handed out already: the page cannot know.
+    return (c.sent_at ? 'Sent ' + day(new Date(c.sent_at)) : c.by_hand ? 'Made by hand ' + day(new Date(c.made_at)) : 'Not sent yet') + (c.ends_at ? ' · ends ' + day(new Date(c.ends_at)) : '');
+  }
+  // The text he sends. Its words name the place in the app as the app does.
+  function couponMessage(c, code, link) {
+    return 'Here is ' + dollars(c.cents) + ' of CountAble Premium credit. In the app, open ' + COUPON_WHERE + ' and enter ' + code + '. It works once' +
+      (c.ends_at ? ', until ' + day(new Date(c.ends_at)) : '') + '.' + (link ? ' Need the app first? ' + link : '');
+  }
+  // iOS wants `&body=` (the same shape the app's own invite uses).
+  function smsLink(body) { return 'sms:&body=' + encodeURIComponent(body); }
+  function couponRow(c) {
+    return '<button class="row" data-act="coupon" data-id="' + esc(c.id) + '"><span class="grow"><b>' + esc(dollars(c.cents)) + ' · ' + esc(couponWho(c)) + '</b><small>' + esc(couponLine(c)) + '</small></span>' +
+      '<span class="chip' + (c.state === 'unused' ? (c.sent_at ? ' on' : '') : c.state === 'used' ? ' gold' : '') + '">' + esc(c.state === 'unused' && c.sent_at ? 'Sent' : COUPON_WORDS[c.state] || text(c.state)) + '</span><i class="chev"></i></button>';
+  }
+  function viewCoupons() {
+    var C = S.coupons;
+    if (!C || C.missing || !(S.people && S.people.people)) return '';
+    if (C.failed) return '<section class="card"><h2 class="card-title">Coupons</h2><p class="fine center">The coupons could not be read just now. Nothing else is affected.</p></section>';
+    var R = C.rules, sum = function (list) { return list.reduce(function (n, c) { return n + (Number(c.cents) || 0); }, 0); };
+    var open = C.coupons.filter(function (c) { return c.state === 'unused'; });
+    var used = C.coupons.filter(function (c) { return c.state === 'used'; });
+    var over = C.coupons.filter(function (c) { return c.state !== 'unused' && c.state !== 'used'; });
+    var waiting = open.filter(function (c) { return !c.sent_at && !c.by_hand; }).length;
+    var chips = '<span class="chip">' + open.length + ' unused · ' + esc(dollars(sum(open))) + '</span>' +
+      (waiting ? '<span class="chip warn">' + waiting + ' not sent</span>' : '') +
+      '<span class="chip gold">' + used.length + ' used · ' + esc(dollars(sum(used))) + '</span>';
+    var past = used.concat(over), older = '';
+    if (past.length) {
+      older = '<button class="link" data-act="cpast">' + (S.showCoupons ? 'Hide used and ended' : 'Used and ended · ' + past.length) + '</button>';
+      if (S.showCoupons) older += '<div class="list">' + past.map(couponRow).join('') + '</div>';
+    }
+    return '<section class="card"><h2 class="card-title">Coupons · ' + open.length + ' unused</h2>' +
+      '<div class="chips mid">' + chips + '</div>' +
+      '<p class="fine center">AI credit a tester adds in the app under ' + esc(COUPON_WHERE) + '. You send it from your own Messages.</p>' +
+      (open.length ? '<div class="list">' + open.map(couponRow).join('') + '</div>' : '<p class="fine center">No unused coupons.</p>') +
+      '<button class="btn amber wide" data-act="cmake">Make a coupon</button>' +
+      '<p class="fine center">' + esc(dollars(R.room_cents)) + ' of room left: at most ' + esc(dollars(R.unused_cap_cents)) + ' of unused coupons can be out at once.</p>' +
+      older + '</section>';
   }
 
   /* ---------- the coach ---------- */
@@ -878,7 +982,7 @@
       }).join('') + '</div>';
     }
     return '' +
-      viewToday() + viewMoney() + viewPeople() + viewInvite() +
+      viewToday() + viewMoney() + viewPeople() + viewInvite() + viewCoupons() +
       '<h1 class="day">The list <span>' + L.items.length + ' open · ' + L.followups.length + ' to chase' + (due ? ' · ' + due + ' due' : '') + '</span></h1>' +
       '<section class="card' + (due ? ' verdict' : '') + '"><h2 class="card-title">Follow-ups · ' + L.followups.length + '</h2>' +
         '<p class="fine center">Things to chase on a day. On that day it turns red here.</p>' +
@@ -924,6 +1028,7 @@
     if (!top) return null;
     if (top.kind === 'item' && $('#itext')) top.draft = { body: val('#itext'), section: val('#isec') || top.orig.section, detail: val('#idetail') };
     if (top.kind === 'follow' && $('#ft')) top.draft = { title: val('#ft'), waiting_on: val('#fwho'), check_on: val('#fdate'), note: val('#fnote') };
+    if (top.kind === 'cmake' && $('#clabel')) { top.label = val('#clabel'); top.who = val('#cfor'); }
     return top;
   }
 
@@ -1218,6 +1323,75 @@
         '<button class="btn wide" data-act="close">Close</button></div>' };
     },
     // Copying was refused by the browser: show the link to press and hold.
+    // Make a coupon: how much, and who it is for (a name is enough).
+    cmake: function (a) {
+      var C = S.coupons;
+      if (!C || !C.rules) return null;
+      var R = C.rules, pick = a.cents || R.amounts[0], people = (S.people && S.people.people) || [];
+      return { html: pop('Make a coupon', 'AI credit a tester adds in the app. It works once, and ends in ' + R.days + ' days if nobody uses it.',
+        '<div class="three">' + R.amounts.map(function (n) {
+          return '<button class="btn small' + (n === pick ? ' on' : '') + '" data-act="camount" data-cents="' + esc(n) + '">' + esc(dollars(n)) + '</button>';
+        }).join('') + '</div>' +
+        '<label class="field" for="cfor"><span class="micro muted">Who it is for</span><select class="well" id="cfor"><option value="">Someone not on the page yet</option>' + people.map(function (p) {
+          return '<option value="' + esc(p.id) + '"' + (p.id === a.who ? ' selected' : '') + '>' + esc(personName(p)) + '</option>';
+        }).join('') + '</select></label>' +
+        '<label class="field" for="clabel"><span class="micro muted">A name, so you can tell it apart (optional)</span><input class="well" id="clabel" maxlength="60" placeholder="A first name is enough" value="' + esc(a.label || '') + '"></label>' +
+        '<p class="fine center">' + esc(dollars(R.room_cents)) + ' of room left under the ' + esc(dollars(R.unused_cap_cents)) + ' limit. Leave phone numbers out: you pick the person in Messages.</p>' +
+        '<div class="pair">' + cancel + '<button class="btn amber" data-act="cmakego">Make it</button></div>') };
+    },
+    // One coupon. Its code is asked for when this opens, and shown here only.
+    coupon: function (a) {
+      // one just made is drawn from its own answer until the list has it
+      var c = couponOf(a.id) || (a.fresh && a.fresh.id === a.id ? a.fresh : null);
+      if (!c) return null;
+      var kv = function (k, v) { return '<div class="kv"><span>' + esc(k) + '</span><b>' + esc(v) + '</b></div>'; };
+      var show = S.cshow && S.cshow.id === c.id ? S.cshow : null, code = show && show.data ? text(show.data.code) : '';
+      var inv = S.people && S.people.invite, link = a.link && inv && inv.link ? text(inv.link) : '';
+      var facts = kv('For', couponWho(c)) + kv('Made', day(new Date(c.made_at)) + (c.by_hand ? ', by hand' : ''));
+      if (c.state === 'unused') facts += kv('Sent', c.sent_at ? day(new Date(c.sent_at)) : c.by_hand ? 'Not known' : 'Not yet') + (c.ends_at ? kv('Ends if unused', day(new Date(c.ends_at))) : '');
+      if (c.state === 'used') {
+        var who = c.used_by && S.people && S.people.people ? S.people.people.filter(function (p) { return p.id === c.used_by; })[0] : null;
+        facts += kv('Used by', text(c.used_name) || 'someone') + (c.used_at ? kv('Used on', day(new Date(c.used_at))) : '') +
+          (who && who.credit_granted_cents ? kv('Their credit left, all coupons', usd(Math.max(0, (who.credit_granted_cents || 0) - (who.ai_spent_cents || 0)) / 100)) : '');
+      }
+      if (c.state === 'cancelled' && c.cancelled_at) facts += kv('Cancelled', day(new Date(c.cancelled_at)));
+      if (c.state === 'ended' && c.ends_at) facts += kv('Ended', day(new Date(c.ends_at)));
+      var body = '';
+      if (c.state === 'unused') {
+        if (!show || show.loading) body = '<p class="fine center">Reading the code.</p>';
+        else if (show.failed || !code) body = '<p class="fine center">' + esc(show.failed || 'This coupon can no longer be used.') + '</p><button class="btn wide" data-act="cagain" data-id="' + esc(c.id) + '">Try again</button>';
+        else {
+          var msg = couponMessage(c, code, link);
+          body = '<div class="box"><span class="micro">The code</span><p class="code">' + esc(code) + '</p></div>' +
+            '<div class="box"><span class="micro">The text</span><p class="pre">' + esc(msg) + '</p>' +
+              (inv && inv.link ? '<button class="btn small' + (a.link ? ' on' : '') + '" data-act="clink">' + (a.link ? 'Install link added' : 'Add the install link') + '</button>' : '') + '</div>' +
+            '<a class="btn amber wide" data-act="ctext" data-id="' + esc(c.id) + '" href="' + esc(smsLink(msg)) + '">Text it</a>' +
+            '<div class="pair"><button class="btn" data-act="ccopy" data-id="' + esc(c.id) + '">Copy the text</button><button class="btn" data-act="ccode" data-id="' + esc(c.id) + '">Copy the code</button></div>' +
+            '<p class="fine center">Text it opens your own Messages with this text filled in. You pick the person. This page never sees anyone’s number.</p>' +
+            '<button class="btn wide" data-act="csent" data-id="' + esc(c.id) + '" data-on="' + (c.sent_at ? '1' : '') + '">' + (c.sent_at ? 'Mark as not sent' : 'Mark as sent') + '</button>' +
+            '<button class="btn red wide" data-act="ccancel" data-id="' + esc(c.id) + '">Cancel this coupon</button>' +
+            '<p class="fine center">Each time a code is shown, it is recorded. The code is not kept on this device.</p>';
+        }
+      }
+      return { full: true, html: '<div class="sheet swap" role="dialog" aria-modal="true" aria-label="Coupon">' +
+        '<h2 class="name">' + esc(dollars(c.cents)) + ' coupon</h2>' +
+        '<div class="chips"><span class="chip' + (c.state === 'used' ? ' gold' : '') + '">' + esc(COUPON_WORDS[c.state] || text(c.state)) + '</span></div>' +
+        '<div class="list">' + facts + '</div>' + body +
+        '<button class="btn wide" data-act="close">Close</button></div>' };
+    },
+    ccancel: function (a) {
+      var c = couponOf(a.id);
+      if (!c) return null;
+      return { html: pop('Cancel this coupon?', 'The code stops working at once. It stays on the list as cancelled. If you already sent it, tell them.',
+        '<div class="pair"><button class="btn" data-act="close">Keep it</button><button class="btn red" data-act="ccancelgo" data-id="' + esc(a.id) + '">Cancel it</button></div>') };
+    },
+    // Copying was refused: the words, to press and hold.
+    ccopied: function (a) {
+      if (!a.words) return null;
+      return { html: pop('Copy it by hand', 'Copying was refused here. Press and hold to copy.',
+        '<label class="field" for="cwords"><textarea class="well" id="cwords" readonly>' + esc(a.words) + '</textarea></label>' +
+        '<button class="btn" data-act="close">Close</button>') };
+    },
     invitelink: function () {
       var inv = S.people && S.people.invite;
       if (!inv || !inv.link) return null;
@@ -1241,6 +1415,8 @@
     if (S.texts && !stack.some(function (e) { return e.kind === 'texts'; })) forgetTexts();
     if (S.pcoach && !stack.some(function (e) { return e.kind === 'pcoach'; })) forgetCoach();
     if (S.trace && !stack.some(function (e) { return e.kind === 'trace'; })) forgetTrace();
+    if (S.cshow && !stack.some(function (e) { return e.kind === 'coupon' || e.kind === 'ccancel' || e.kind === 'ccopied'; })) forgetCoupon();
+    if (S.coupons && !(S.people && S.list)) forgetCoupons();
     var top = stack.length ? stack[stack.length - 1] : null;
     var s = top && S.list ? SHEETS[top.kind](top) : null;
     if (top && !s) { stack.length = 0; top = null; }
@@ -1564,6 +1740,78 @@
         navigator.clipboard.writeText(inv.link).then(function () { toast('Invite link copied'); }, function () { openSheet('invitelink'); });
       } catch (e) { openSheet('invitelink'); }
     },
+
+    // Coupons: made here, sent from his own Messages, used by a tester in the app.
+    cpast: function () { S.showCoupons = !S.showCoupons; drawPage(); },
+    // (draft: true keeps the keyboard down until he taps the name box; the name is optional.)
+    cmake: function () { if (S.coupons && S.coupons.rules) openSheet('cmake', { cents: null, who: '', label: '', made: newId(), draft: true }); },
+    camount: function (d) {
+      var top = capture();
+      if (!top || top.kind !== 'cmake') return;
+      top.cents = Number(d.cents); drawSheet();
+    },
+    cmakego: function (d, el) {
+      var top = capture(), C = S.coupons;
+      if (!top || top.kind !== 'cmake' || !C || !C.rules || S.busy) return;
+      var cents = top.cents || C.rules.amounts[0], label = text(top.label).trim();
+      if (cents > C.rules.room_cents) { toast('That would put more than ' + dollars(C.rules.unused_cap_cents) + ' of unused coupons out. Cancel one first.'); return; }
+      // The id was made with the sheet and stays with it, so a second tap
+      // after a lost answer is the SAME coupon and is made once.
+      var release = hold(el), mine = gen;
+      rpc('owner_coupon_make', { _cents: cents, _label: label || null, _for: top.who || null, _id: top.made }).then(function (r) {
+        if (mine !== gen) { S.busy = false; return; }
+        if (r.ok && r.data && r.data.id) {
+          S.busy = false;
+          // Its code came back with it: shown at once, from memory, and nowhere else.
+          cshowTurn++; S.cshow = { id: r.data.id, data: r.data };
+          stack.length = 0; stack.push({ kind: 'coupon', id: r.data.id, fresh: r.data });
+          drawSheet(); toast('Coupon made'); loadCoupons();
+          return;
+        }
+        if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
+        if (SECOND(r)) { needSecond(); return; }
+        release(); toast(couponWhy(r));
+        if (r.status === 0) loadCoupons();     // it may have landed: show what is true
+      });
+    },
+    // The code of one coupon: asked for here, by this tap, and nowhere else.
+    coupon: function (d) {
+      var c = couponOf(d.id);
+      if (!c) return;
+      stack.push({ kind: 'coupon', id: c.id });
+      if (c.state === 'unused') loadCouponCode(c.id); else drawSheet();
+    },
+    cagain: function (d) { if (d.id && !(S.cshow && S.cshow.loading)) loadCouponCode(d.id); },
+    clink: function () { var top = stack.length ? stack[stack.length - 1] : null; if (top && top.kind === 'coupon') { top.link = !top.link; drawSheet(); } },
+    // "Text it" is a link: the tap itself opens his Messages. This only notes that it was sent.
+    ctext: function (d) { ACT.csentquiet(d); },
+    csentquiet: function (d) {
+      var mine = gen;
+      if (!d.id) return;
+      rpc('owner_coupon_sent', { _id: d.id, _sent: true }).then(function (r) { if (mine === gen && r.ok) loadCoupons(); });
+    },
+    ccopy: function (d) { ACT.ccopyof(d, true); },
+    ccode: function (d) { ACT.ccopyof(d, false); },
+    ccopyof: function (d, whole) {
+      var top = stack.length ? stack[stack.length - 1] : null, c = top && top.kind === 'coupon' ? couponOf(top.id) || top.fresh : null;
+      var code = S.cshow && c && S.cshow.id === c.id && S.cshow.data ? text(S.cshow.data.code) : '';
+      if (!c || !code) return;
+      var inv = S.people && S.people.invite;
+      var words = whole ? couponMessage(c, code, top.link && inv && inv.link ? text(inv.link) : '') : code;
+      var byHand = function () { openSheet('ccopied', { words: words }); };
+      try {
+        navigator.clipboard.writeText(words).then(function () {
+          toast(whole ? 'Text copied' : 'Code copied');
+          if (whole) ACT.csentquiet({ id: c.id });
+        }, byHand);
+      } catch (e) { byHand(); }
+    },
+    csent: function (d, el) {
+      var on = !d.on;
+      change(el, 'owner_coupon_sent', { _id: d.id, _sent: on }, on ? 'Marked as sent' : 'Marked as not sent', loadCoupons);
+    },
+    ccancel: function (d) { if (couponOf(d.id)) openSheet('ccancel', { id: d.id }); },
+    ccancelgo: function (d, el) { change(el, 'owner_coupon_cancel', { _id: d.id }, 'Coupon cancelled', closeAll); },
 
     // The Coach tab. Its two reads are asked for here, when it is opened.
     tab: function (d) {

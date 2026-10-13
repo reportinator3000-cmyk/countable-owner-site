@@ -198,3 +198,7 @@ label.field .micro{color:var(--w80)}
 .toast{position:fixed;left:16px;right:16px;bottom:calc(20px + env(safe-area-inset-bottom,0px));z-index:50;display:flex;justify-content:center;pointer-events:none}
 .toast span{background:var(--glass-strong);border:1px solid var(--line);border-radius:12px;padding:10px 14px;font-size:13px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;-webkit-backdrop-filter:blur(24px);backdrop-filter:blur(24px);animation:veilIn var(--out) var(--ease) both;text-align:center}
 .toast.leaving span{animation:veilOut var(--out) ease both}
+/* coupons: a code to read out or copy, and a button that is a link (it opens Messages) */
+.code{font-size:26px;font-weight:900;letter-spacing:.14em;text-align:center;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;-webkit-user-select:all;user-select:all}
+a.btn{text-decoration:none;color:inherit}
+a.btn.amber{color:var(--ink)}
