@@ -805,6 +805,26 @@
   var NB_ORDER = ['summary', 'coaching_brief', 'judgment', 'week_review', 'next_week_plan_seed', 'week_shape', 'insights', 'goal_campaigns', 'declared_goals', 'long_term_goals',
     'capabilities', 'preferences', 'constraints', 'standing_rules', 'coaching_notes', 'followups', 'memory'];
   var nbWords = function (k) { var w = text(k).replace(/_/g, ' '); return w.charAt(0).toUpperCase() + w.slice(1); };
+  // A PLAN WITH NO WEEKLY REVIEW IS NOT A REVIEW THAT FAILED (Oct 13 2026: two
+  // real people read "Failed" and "Not owed" here, above "no notebook yet").
+  // Free and Basic have no weekly review (limits.ts ai_reflection). Since Oct 6
+  // 2026 the job closes such a week `not_owed`; before that every try stopped
+  // at the plan's own gate and was kept as `failed` with this error, which the
+  // report and the alarm already read as "not in the plan" (report_email.ts
+  // REVIEW_NOT_IN_PLAN_ERROR, watchdog.ts reviewRunsOwed). On Premium the same
+  // error is the week's tries running out, which IS a failure, and a plan the
+  // page does not know is never guessed at.
+  var REVIEW_NOT_IN_PLAN_ERROR = 'daily_limit_hit';
+  function noReviewInPlan(tier) { return tier === 'free' || tier === 'basic'; }
+  function reviewNotInPlan(r, tier) {
+    return r.status === 'not_owed' || (r.status === 'failed' && r.error === REVIEW_NOT_IN_PLAN_ERROR && noReviewInPlan(tier));
+  }
+  // A CODE WHOSE CREDIT IS SPENT (owner, Oct 13 2026: "the weekly review should
+  // not ignore spend credit"). The week is closed the same way and its row
+  // carries this note (review_credit.ts REVIEW_CREDIT_SPENT). It is asked
+  // first: the plan is Premium, so "not in their plan" would be untrue.
+  var REVIEW_CREDIT_SPENT = 'credit_spent';
+  function reviewCreditSpent(r) { return r.status === 'not_owed' && r.error === REVIEW_CREDIT_SPENT; }
   // The notebook is whatever the coach wrote, so it is drawn by its shape: a
   // line, a list, or named parts. Every word is escaped.
   function nbValue(v, depth) {
@@ -1163,8 +1183,10 @@
           (c.style_notes ? '<div class="nbk"><span class="micro muted">' + (D.you ? 'Your' : 'Their') + ' notes on the coach\u2019s style</span><p>' + esc(c.style_notes) + '</p></div>' : '') +
           (c.goals ? '<div class="nbk"><span class="micro muted">' + (D.you ? 'Your' : 'Their') + ' stated goals</span><p>' + esc(c.goals) + '</p></div>' : '')
           : '<p class="fine">They have not set up a coach yet.</p>';
+        var tier = q ? q.tier : null;
         var reviews = D.reviews.length ? '<div class="nbk"><span class="micro muted">Weekly reviews</span><div class="list">' + D.reviews.map(function (r) {
-          return '<div class="kv"><span>Week to ' + esc(day(fromIso(r.week_end))) + ' · try ' + esc(r.attempt) + '</span><b>' + esc(nbWords(r.status)) + (r.model ? ' · ' + esc(r.model) : '') + '</b></div>';
+          var said = reviewCreditSpent(r) ? 'Credit spent' : reviewNotInPlan(r, tier) ? 'Not in ' + (D.you ? 'your' : 'their') + ' plan' : nbWords(r.status);
+          return '<div class="kv"><span>Week to ' + esc(day(fromIso(r.week_end))) + ' · try ' + esc(r.attempt) + '</span><b>' + esc(said) + (r.model ? ' · ' + esc(r.model) : '') + '</b></div>';
         }).join('') + '</div></div>' : '';
         var nb;
         if (D.notebook) {
@@ -1182,7 +1204,8 @@
         } else if (D.notebook_held === 'policy') {
           nb = '<p class="fine center">Their coach’s notebook is not shown: the database is holding it back.</p>';
         } else {
-          nb = '<p class="fine center">The coach has not written a notebook for ' + (D.you ? 'you' : 'them') + ' yet.</p>';
+          nb = '<p class="fine center">The coach has not written a notebook for ' + (D.you ? 'you' : 'them') + ' yet.' +
+            (noReviewInPlan(tier) ? ' The weekly review that writes it is part of Premium, and ' + (D.you ? 'you are' : 'they are') + ' on ' + TIERS[tier] + '.' : '') + '</p>';
         }
         body = coach + reviews + nb + '<button class="btn wide" data-act="coachwhogo" data-id="' + esc(a.id) + '">What ran for ' + (D.you ? 'you' : 'them') + '</button>';
       } else if (T.failed) {
