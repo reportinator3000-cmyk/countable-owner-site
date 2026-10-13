@@ -1119,7 +1119,7 @@
       } else if (D && !D.kept) {
         body = '<div class="list">' + D.given.map(function (p, i, all) { return kv(partName(p, i, all), grouped(p.chars) + ' characters'); }).join('') +
           kv('What they asked', grouped(D.asked_chars) + ' characters') + kv('What it wrote', grouped(D.wrote_chars) + ' characters') + '</div>' +
-          '<p class="fine center">Sizes only. The words are kept for your own account. The privacy policy covers a person’s account and texts, not a copy of what a model was shown about them.</p>';
+          '<p class="fine center">Sizes only. This record was kept before other people’s words were kept, so there is nothing more of it.</p>';
       } else if (D) {
         var given = D.given.map(function (p, i, all) {
           var open = !!T.open['g' + i];
@@ -1130,12 +1130,13 @@
             '</div></div></div></div>';
         }).join('');
         var cards = Array.isArray(D.wrote) ? D.wrote : [];
-        body = (D.asked ? '<div class="nbk"><span class="micro muted">What you asked</span><p class="pre">' + esc(D.asked) + '</p></div>' : '') +
+        body = (D.asked ? '<div class="nbk"><span class="micro muted">' + (D.own === false ? 'What they asked' : 'What you asked') + '</span><p class="pre">' + esc(D.asked) + '</p></div>' : '') +
           '<h2 class="card-title">What it was given</h2><p class="fine center">Exactly as it was sent, in order. Tap a part to read it.</p><div class="sugs">' + given + '</div>' +
           '<h2 class="card-title">What it wrote</h2>' +
           (cards.length ? cards.map(function (w) {
             return '<div class="nbk"><span class="micro muted">' + esc((w.date ? day(fromIso(w.date)) + ' · ' : '') + text(w.title)) + '</span><p class="pre">' + esc(w.notes) + '</p></div>';
           }).join('') : '<p class="fine center">Nothing was written.</p>') +
+          (D.health_cut ? '<p class="fine center">Left out of this record: what comes from the watch and Apple Health.</p>' : '') +
           '<p class="fine center">This opening is on the record. Nothing here is kept on this device. It is kept in the database for thirty days.</p>';
       } else if (T.failed) {
         body = '<p class="msg-line warn" role="alert">' + esc(T.failed) + '</p><button class="btn wide" data-act="traceagain" data-id="' + esc(a.id) + '">Try again</button>';
@@ -1179,7 +1180,7 @@
             (D.left_out.length ? '<p class="fine center">Left out: what comes from the watch and Apple Health.</p>' : '') +
             '<p class="fine center">This opening is on the record. The notebook is not kept on this device.</p>';
         } else if (D.notebook_held === 'policy') {
-          nb = '<p class="fine center">Their coach’s notebook is not shown. The privacy policy covers their account and their texts, not the notes the coach keeps.</p>';
+          nb = '<p class="fine center">Their coach’s notebook is not shown: the database is holding it back.</p>';
         } else {
           nb = '<p class="fine center">The coach has not written a notebook for ' + (D.you ? 'you' : 'them') + ' yet.</p>';
         }
