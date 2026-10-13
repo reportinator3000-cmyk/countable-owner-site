@@ -21,8 +21,16 @@
 // this page: a session made any other way (a password, an emailed link) is
 // refused the same, and cannot ask for the emailed code at all, because the
 // function will only send one to a sign-in that began with the texted code
-// on this very device. A sign-in that has passed stays good on this device
-// until it is signed out.
+// on this very device.
+//
+// A DEVICE THE PAGE RECOGNIZES STILL ASKS FOR THE TEXTED CODE (owner, the
+// same evening: "for devices it recognizes, lets always have the iphone
+// texted code as verification"). A device that has once passed both codes is
+// remembered by the database, and a sign-in on it needs the texted code
+// alone: no email. And no sign-in lasts: after SIGNIN_HOURS the database
+// stops answering it and this page goes back to the sign-in. (Not at every
+// open: texted codes are capped at six a day per number, shared with the
+// app, so a code at every open would lock him out of both.)
 //
 // NO LIBRARY IS LOADED. A script from another site would run with the owner's
 // session, so the few calls this page makes are written out below and the
@@ -58,6 +66,9 @@
   var STORE = 'countable-owner-session-v1';
   var DEVICE = 'countable-owner-device-v1';
   var OPEN = 'countable-owner-open-v1';
+  // A sign-in is trusted this long, then a new texted code is needed. The
+  // database decides (owner_signin_hours); this is only for the words.
+  var SIGNIN_HOURS = 12;
 
   var $ = function (s, r) { return (r || document).querySelector(s); };
   var esc = function (s) {
@@ -226,7 +237,8 @@
     pending: null,             // a sheet with typing in it, kept across being signed out
     sec: {}, fopen: {}, showDone: false, showGone: false, showSeen: false,
     asked: {},                 // the id of a top-up still in the air, so a second tap counts once
-    sending: false             // the emailed code is being asked for
+    sending: false,            // the database is being asked about this sign-in (and, on a new device, to email the code)
+    codeSent: false            // a code was emailed for this sign-in: show the box to type it in
   };
   try { S.sec = JSON.parse(readStore(OPEN) || '{}') || {}; } catch (e) { S.sec = {}; }
   var stack = [];
@@ -250,13 +262,23 @@
   }
   function viewSecond() {
     var note = S.note ? '<p class="msg-line ' + esc(S.noteKind) + '" role="alert">' + esc(S.note) + '</p>' : '';
+    var out = '<button class="link" data-act="signoutgo">Sign out</button></section>';
+    // The database is being asked about this device. On one it has seen
+    // before, the texted code was enough: the list opens and nothing is typed.
+    if (!S.codeSent && S.sending) {
+      return '<section class="card"><h1 class="card-title">One moment</h1><p class="fine center">Checking this device.</p>' + out;
+    }
+    // Nothing was sent (the database refused, or there was no answer).
+    if (!S.codeSent) {
+      return '<section class="card"><h1 class="card-title">One more step</h1>' + note +
+        '<button class="btn wide" data-act="secondagain">Try again</button>' + out;
+    }
     return '<section class="card"><h1 class="card-title">One more step</h1>' +
-      '<p class="fine center">This is a new sign-in, so it needs your email as well as your phone. A six-digit code is on its way to your email address. It is good for ten minutes.</p>' +
+      '<p class="fine center">This device is new here, so it needs your email as well as your phone. A six-digit code was sent to your email address. It is good for ten minutes. After this, this device needs only the texted code.</p>' +
       '<label class="field" for="scode"><span class="micro muted">The code from the email</span>' +
       '<input class="well code" id="scode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"></label>' + note +
       '<button class="btn amber wide" data-act="secondgo"' + (S.busy ? ' disabled' : '') + '>' + (S.busy ? 'Checking' : 'Open the page') + '</button>' +
-      '<button class="link" data-act="secondagain"' + (S.sending ? ' disabled' : '') + '>' + (S.sending ? 'Sending' : 'Send it again') + '</button>' +
-      '<button class="link" data-act="signoutgo">Sign out</button></section>';
+      '<button class="link" data-act="secondagain"' + (S.sending ? ' disabled' : '') + '>' + (S.sending ? 'Sending' : 'Send it again') + '</button>' + out;
   }
   function say(text, kind) { S.note = text || ''; S.noteKind = kind || ''; }
   // What the second step said, in his words.
@@ -273,8 +295,18 @@
     if (r.status === 0) return 'No connection. Try again.';
     return SECOND_WORDS[r.data && r.data.error] || 'That did not work. Try again in a moment.';
   }
-  // Ask for the emailed code. Asked once when the step appears, and again
-  // only when he taps "Send it again".
+  // This sign-in's time is up (or its trust was ended somewhere else). The
+  // page goes back to the sign-in; typing in an open sheet is kept, as it is
+  // through any sign-out it did not ask for.
+  var ENDED = function (r) { return !!(r.data && r.data.error === 'signin_ended'); };
+  function ended() {
+    var token = session && session.access_token;
+    signedOut('This page asks for a new texted code every ' + SIGNIN_HOURS + ' hours. Sign in again.');
+    if (token) post('/auth/v1/logout?scope=local', {}, token);
+  }
+  // Ask the database about this sign-in. On a device it has seen before the
+  // answer is "trusted" and the list opens. On a new one a code is emailed.
+  // Asked once when the step appears, and again only when he taps a button.
   function secondStart() {
     if (S.sending) return;
     S.sending = true; drawPage();
@@ -282,10 +314,11 @@
     second('start').then(function (r) {
       S.sending = false;
       if (mine !== gen) return;
+      if (ENDED(r)) { ended(); return; }
       if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
       if (r.status === 403) { S.stage = 'notowner'; drawPage(); return; }
       if (r.ok && r.data && r.data.trusted) { S.stage = 'opening'; say(''); drawPage(); load(); return; }
-      if (r.ok && r.data && r.data.ok) say('The code was sent. Check your email.', '');
+      if (r.ok && r.data && r.data.ok) { S.codeSent = true; say('The code was sent. Check your email.', ''); }
       else say(secondSays(r), 'warn');
       if (S.stage === 'second') drawPage();
     });
@@ -296,7 +329,7 @@
     var first = S.stage !== 'second';
     S.list = null; S.stage = 'second'; S.busy = false;
     stack.length = 0; drawSheet();
-    if (first) { say(''); drawPage(); secondStart(); } else drawPage();
+    if (first) { S.codeSent = false; say(''); drawPage(); secondStart(); } else drawPage();
   }
   // The session is over. Anything being typed is kept and comes back after signing in.
   function signedOut(text) {
@@ -549,9 +582,9 @@
         '<div class="pair">' + cancel + '<button class="btn amber" data-act="tripwirego">Save</button></div>') };
     },
     signout: function () {
-      return { html: pop('Sign out?', 'You will need a texted code and an emailed code to open this page again.',
+      return { html: pop('Sign out?', 'You will need a texted code to open this page again on this device.',
         '<div class="pair">' + cancel + '<button class="btn red" data-act="signoutgo">Sign out</button></div>' +
-        '<p class="fine center">If you think someone else has your sign-in, end it everywhere. The app on your phone will ask for a code again too.</p>' +
+        '<p class="fine center">If you think someone else has your sign-in, end it everywhere. Every device is forgotten, so each will need a texted code and an emailed code again, and the app on your phone will ask for a code again too.</p>' +
         '<button class="btn red wide" data-act="signoutgo" data-all="1">Sign out of every device</button>') };
     }
   };
@@ -774,6 +807,7 @@
       second('verify', code).then(function (r) {
         S.busy = false;
         if (mine !== gen) return;
+        if (ENDED(r)) { ended(); return; }
         if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
         if (r.status === 403) { S.stage = 'notowner'; drawPage(); return; }
         if (r.ok && r.data && r.data.ok) { say(''); S.stage = 'opening'; drawPage(); load(); return; }
@@ -790,8 +824,9 @@
       keepSession(null); S.list = null; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
       stack.length = 0; drawSheet(); drawPage();
       if (!token) return;
-      // First the database forgets that this sign-in (or every one) passed the
-      // second step, so a token still good for an hour opens nothing. Then
+      // First the database forgets that this sign-in passed (or, for every
+      // device, every sign-in AND every remembered device), so a token still
+      // good for an hour opens nothing. Then
       // the sign-in itself ends: "local" is this page's, "global" is every
       // session of the account.
       post('/rest/v1/rpc/owner_sessions_revoke', { _all: everywhere }, token).then(function () {
