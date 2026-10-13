@@ -104,6 +104,13 @@ ol{list-style:none}
 /* a button that is switched on */
 .btn.on{border-color:hsla(42,95%,80%,.75);color:var(--amber)}
 
+/* one person's texts with the coach: theirs to the right, the coach's to the left */
+.thread{display:flex;flex-direction:column;gap:10px;min-width:0}
+.say{max-width:88%;min-width:0;border:1px solid var(--hair);border-radius:14px;padding:9px 12px;background:var(--w06);display:flex;flex-direction:column;gap:4px;align-self:flex-start}
+.say.them{align-self:flex-end;background:hsla(35,85%,60%,.12);border-color:hsla(35,85%,60%,.35)}
+.say small{font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--w70);overflow-wrap:anywhere}
+.say p{font-size:15px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere;-webkit-user-select:text;user-select:text}
+
 /* lists */
 .list{display:flex;flex-direction:column;min-width:0}
 .row{display:flex;align-items:center;gap:12px;min-width:0;padding:12px 0;width:100%}

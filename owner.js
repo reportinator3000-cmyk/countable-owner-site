@@ -54,9 +54,16 @@
 // or the copy invite link like your mock up"). One more read
 // (owner_people_read): each account's name, plan, when it last opened the
 // app, this week's planned and done days, and how many texts went each way.
-// COUNTS ONLY: nobody's messages, numbers or addresses are read or shown.
+// The list of people is COUNTS ONLY: no message, number or address is in it.
 // The read comes after the list and never in its way. The invite link comes
 // with it from the database; it is not written in this public file.
+//
+// A PERSON'S TEXTS (owner, Oct 13 2026: "lets update the privacy documents
+// and then put the individual texts inside the dashboard"). The privacy
+// policy said so first. A person's texts with the coach are read ONE PERSON
+// AT A TIME and only on a tap (owner_person_texts), the database records
+// every opening, and the words are held in memory only: never in this
+// browser's storage, and gone when the sheet closes or the sign-in ends.
 //
 // TWO HANDS, ONE ROW. A session on the Mac can change an item while it is open
 // here. A save says when this page last saw the row; if the row has changed,
@@ -247,7 +254,8 @@
     asked: {},                 // the id of a top-up still in the air, so a second tap counts once
     sending: false,            // the database is being asked about this sign-in (and, on a new device, to email the code)
     codeSent: false,           // a code was emailed for this sign-in: show the box to type it in
-    people: null               // the people and the invite link, read after the list (null = not read yet)
+    people: null,              // the people and the invite link, read after the list (null = not read yet)
+    texts: null                // ONE person's texts while their sheet is open; memory only, never stored
   };
   try { S.sec = JSON.parse(readStore(OPEN) || '{}') || {}; } catch (e) { S.sec = {}; }
   var stack = [];
@@ -336,13 +344,13 @@
   // in an open sheet is kept by whoever called this (S.pending).
   function needSecond() {
     var first = S.stage !== 'second';
-    S.list = null; S.people = null; S.stage = 'second'; S.busy = false;
+    S.list = null; S.people = null; forgetTexts(); S.stage = 'second'; S.busy = false;
     stack.length = 0; drawSheet();
     if (first) { S.codeSent = false; say(''); drawPage(); secondStart(); } else drawPage();
   }
   // The session is over. Anything being typed is kept and comes back after signing in.
   function signedOut(text) {
-    keepSession(null); S.list = null; S.people = null; S.stage = 'signin'; S.busy = false;
+    keepSession(null); S.list = null; S.people = null; forgetTexts(); S.stage = 'signin'; S.busy = false;
     say(text || 'You are signed out. Sign in again.', 'warn');
     stack.length = 0; drawSheet(); drawPage();
   }
@@ -489,8 +497,36 @@
     return '<section class="card"><h2 class="card-title">People · ' + P.people.length + '</h2>' +
       (tally ? '<div class="chips mid">' + tally + '</div>' : '') +
       (list ? '<div class="list">' + list + '</div>' : '<p class="fine center">Nobody has an account yet.</p>') +
-      '<p class="fine center">How each person is doing, by the numbers. Nobody’s messages are shown here.</p></section>';
+      '<p class="fine center">How each person is doing, by the numbers. A person’s texts open only when you ask for them.</p></section>';
   }
+  // ONE PERSON'S TEXTS WITH THE COACH, asked for by a tap and never before.
+  // The database records each opening. The answer lives in S.texts only.
+  var TEXTS_FIRST = 40, TEXTS_MORE = 100;
+  var textsTurn = 0;
+  // Forgetting also makes any answer still in the air too late to be shown.
+  function forgetTexts() { textsTurn++; S.texts = null; }
+  function loadTexts(id, limit) {
+    var mine = gen, turn = ++textsTurn;
+    S.texts = { id: id, loading: true, data: S.texts && S.texts.id === id ? S.texts.data : null };
+    drawSheet();
+    rpc('owner_person_texts', { _user: id, _limit: limit }).then(function (r) {
+      // Too late: the sheet was closed, the sign-in ended, or a newer read is in the air.
+      if (mine !== gen || turn !== textsTurn) return;
+      if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
+      if (SECOND(r)) { needSecond(); return; }
+      if (r.ok && r.data && r.data.texts) S.texts = { id: id, data: r.data, fresh: limit === TEXTS_FIRST };
+      else S.texts = { id: id, failed: textsWhy(r), data: null };
+      drawSheet();
+    });
+  }
+  var kindWord = function (k) { return text(k).replace(/_/g, ' '); };
+  function textsWhy(r) {
+    if (r.status === 0) return 'No answer came back. Try again.';
+    if (NOT_OWNER(r)) return 'This account is not the owner.';
+    if (r.data && r.data.code === '22023' && r.data.message) return String(r.data.message);
+    return 'The texts could not be read. Try again in a moment.';
+  }
+
   function viewInvite() {
     var inv = S.people && S.people.invite;
     if (!inv || !inv.link) return '';
@@ -697,7 +733,35 @@
           (q.credit_granted_cents ? kv('AI credit given', usd(q.credit_granted_cents / 100)) + kv('Credit left', usd(left / 100)) : '') +
           kv('Teams', (q.teams || []).length ? q.teams.join(', ') : 'none') +
         '</div>' +
-        '<p class="fine">Their messages are not shown here.</p>' +
+        '<button class="btn wide" data-act="texts" data-id="' + esc(q.id) + '">Read their texts</button>' +
+        '<p class="fine center">Their texts with the coach. Each time you open them, it is recorded.</p>' +
+        '<button class="btn wide" data-act="close">Close</button></div>' };
+    },
+    // One person's texts with the coach, oldest first. Read only.
+    texts: function (a) {
+      var T = S.texts, P = S.people;
+      if (!T || T.id !== a.id) return null;
+      var q = P && P.people ? P.people.filter(function (x) { return x.id === a.id; })[0] : null;
+      var who = q ? (q.name || 'No name yet') : 'This person';
+      var D = T.data, body;
+      if (D) {
+        var more = D.shown >= D.limit && D.limit < TEXTS_MORE
+          ? '<button class="link" data-act="textsmore" data-id="' + esc(a.id) + '"' + (T.loading ? ' disabled' : '') + '>' + (T.loading ? 'Reading' : 'Earlier texts') + '</button>' : '';
+        body = D.texts.length ? more + '<div class="thread">' + D.texts.map(function (m) {
+          var them = m.from === 'them';
+          return '<div class="say ' + (them ? 'them' : 'coach') + '"><small>' + esc(them ? who : 'Coach') + ' \u00b7 ' + esc(when(m.at)) +
+            (!them && m.kind ? ' \u00b7 ' + esc(kindWord(m.kind)) : '') + '</small><p>' + esc(m.text) + '</p></div>';
+        }).join('') + '</div>' : '<p class="fine center">No texts with the coach yet.</p>';
+      } else if (T.failed) {
+        body = '<p class="msg-line warn" role="alert">' + esc(T.failed) + '</p><button class="btn wide" data-act="textsagain" data-id="' + esc(a.id) + '">Try again</button>';
+      } else {
+        body = '<p class="fine center">Reading.</p>';
+      }
+      return { full: true, bottom: !!(D && T.fresh), html: '<div class="sheet swap" role="dialog" aria-modal="true" aria-label="Texts">' +
+        '<h2 class="name">' + esc(who) + '</h2>' +
+        '<p class="fine">Texts with the coach, oldest first.' + (D && D.texts.length ? ' Showing the last ' + D.texts.length + '.' : '') + '</p>' +
+        body +
+        '<p class="fine center">This opening is on the record. The texts are not kept on this device.</p>' +
         '<button class="btn wide" data-act="close">Close</button></div>' };
     },
     // Copying was refused by the browser: show the link to press and hold.
@@ -719,6 +783,9 @@
   function drawSheet() {
     var root = $('#sheet');
     clearTimeout(leaveTimer);
+    // A person's texts are forgotten the moment their sheet is closed: no texts
+    // sheet open means nobody's texts are held, whichever way it was closed.
+    if (S.texts && !stack.some(function (e) { return e.kind === 'texts'; })) forgetTexts();
     var top = stack.length ? stack[stack.length - 1] : null;
     var s = top && S.list ? SHEETS[top.kind](top) : null;
     if (top && !s) { stack.length = 0; top = null; }
@@ -733,6 +800,8 @@
     root.hidden = false;
     root.innerHTML = '<div class="veil' + (s.full ? ' full' : '') + (was ? ' still' : '') + '" data-veil>' + s.html + '</div>';
     document.documentElement.classList.add('locked');
+    // A thread just read opens on its newest text, which is at the bottom.
+    if (s.bottom) { var sh = root.querySelector('.sheet'); if (sh) sh.scrollTop = sh.scrollHeight; if (S.texts) S.texts.fresh = false; }
     var first = root.querySelector('input,textarea');
     // A new row asks for typing at once; an existing one is read first.
     if (first && !top.draft && (!top.id || top.kind === 'seen')) { try { first.focus({ preventScroll: true }); } catch (e) { /* no focus, no harm */ } }
@@ -949,7 +1018,7 @@
     signoutgo: function (d) {
       var token = session && session.access_token, everywhere = !!(d && d.all);
       gen++;                                   // every call still in the air is now too late to matter
-      keepSession(null); S.list = null; S.people = null; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
+      keepSession(null); S.list = null; S.people = null; forgetTexts(); S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
       stack.length = 0; drawSheet(); drawPage();
       if (!token) return;
       // First the database forgets that this sign-in passed (or, for every
@@ -1027,6 +1096,10 @@
 
     // A person, and the link to hand a friend.
     person: function (d) { openSheet('person', { id: d.id }); },
+    // Their texts with the coach: asked for here, by this tap, and nowhere else.
+    texts: function (d) { if (!d.id) return; stack.push({ kind: 'texts', id: d.id }); loadTexts(d.id, TEXTS_FIRST); },
+    textsmore: function (d) { if (S.texts && S.texts.id === d.id && !S.texts.loading) loadTexts(d.id, TEXTS_MORE); },
+    textsagain: function (d) { if (S.texts && S.texts.id === d.id && !S.texts.loading) loadTexts(d.id, TEXTS_FIRST); },
     invite: function () {
       var inv = S.people && S.people.invite;
       if (!inv || !inv.link) return;
