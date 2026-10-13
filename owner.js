@@ -511,7 +511,7 @@
     return '<section class="card"><h2 class="card-title">People · ' + P.people.length + '</h2>' +
       (tally ? '<div class="chips mid">' + tally + '</div>' : '') +
       (list ? '<div class="list">' + list + '</div>' : '<p class="fine center">Nobody has an account yet.</p>') +
-      '<p class="fine center">How each person is doing, by the numbers. A person’s texts open only when you ask for them.</p></section>';
+      '<p class="fine center">Real people only: the accounts made for the films and for Apple’s review are left out. A person’s texts open only when you ask for them.</p></section>';
   }
   // ONE PERSON'S TEXTS WITH THE COACH, asked for by a tap and never before.
   // The database records each opening. The answer lives in S.texts only.
@@ -631,8 +631,12 @@
   }
   function forgetCoachTab() { coachTurn++; S.coach = null; S.coachWho = null; }
 
+  // Who a call was for. An account made for a film, a demo or a test is not
+  // a person: the database sends its calls with no name and no id, and they
+  // are shown as a demo account's. The dashboard names real people only.
+  function callWho(c) { return c.who || (c.demo ? 'A demo account' : c.team ? 'A team' : (c.user ? 'No name yet' : 'The system')); }
   function callRow(c) {
-    var who = c.who || (c.team ? 'A team' : (c.user ? 'No name yet' : 'The system'));
+    var who = callWho(c);
     var bad = c.outcome !== 'ok';
     var line = bad ? reasonWords(c.reason)
       : (c.model || 'no model') + ' · read ' + grouped(c.in) + ' · wrote ' + grouped(c.out) + ' · ' + money(c.cost_cents);
@@ -673,6 +677,7 @@
       '<p class="stat' + (T.errors ? '' : ' calm') + '">' + esc(money(T.cost_cents)) + ' · ' + esc(plural(T.calls, 'call', 'calls')) + '</p>' +
       (chips ? '<div class="chips mid">' + chips + '</div>' : '') +
       '<p class="fine center">It read ' + esc(compact(T.tokens_in)) + ' tokens and wrote ' + esc(compact(T.tokens_out)) + '. A token is about three quarters of a word.</p>' +
+      (D.demo && D.demo.calls ? '<p class="fine center">Of that, ' + esc(plural(D.demo.calls, 'call', 'calls')) + ' (' + esc(money(D.demo.cost_cents)) + ') were demo accounts: the ones the films are shot on and Apple’s reviewers sign in with. They are counted because they cost real money, and named nowhere.</p>' : '') +
       (C.failed ? '<p class="msg-line warn" role="alert">' + esc(C.failed) + '</p>' : '') + '</section>';
 
     var trouble = '';
@@ -723,7 +728,7 @@
 
     var people = !person && D.people.length ? '<section class="card"><h2 class="card-title">Who it ran for</h2><div class="list">' + D.people.map(function (p) {
       return '<button class="row" data-act="coachwho" data-id="' + esc(p.id) + '"><span class="grow"><b>' + esc(p.name || 'No name yet') + '</b><small>' + esc(plural(p.calls, 'call', 'calls')) + '</small></span><span class="chip num">' + esc(money(p.cost_cents)) + '</span><i class="chev"></i></button>';
-    }).join('') + '</div><p class="fine center">Tap a person to see only what ran for them. Timers and team texts are not anyone’s.</p></section>' : '';
+    }).join('') + '</div><p class="fine center">Real people only. Tap one to see only what ran for them. Timers, team texts and demo accounts are not anyone’s.</p></section>' : '';
 
     var shown = S.coachAll ? D.recent : D.recent.slice(0, 12);
     var recent = '<section class="card"><h2 class="card-title">Recent calls</h2>' +
@@ -1082,7 +1087,7 @@
         '<h2 class="name">' + esc(jobName(c.kind)) + '</h2>' +
         '<div class="chips">' + (c.outcome === 'error' ? '<span class="chip bad">Failed</span>' : c.outcome === 'blocked' ? '<span class="chip warn">Blocked</span>' : c.cut_short ? '<span class="chip warn">Cut short</span>' : '<span class="chip">Ran</span>') + '</div>' +
         '<div class="list">' +
-          kv('When', when(c.at)) + kv('For', c.who || (c.team ? 'A team' : (c.user ? 'No name yet' : 'The system'))) +
+          kv('When', when(c.at)) + kv('For', callWho(c)) +
           kv('Model', c.model) + kv('Thinking', c.effort) + (c.rung ? kv('How much it was given', RUNG_WORDS[c.rung] || c.rung) : '') +
           kv('How it ended', ended) +
           (c.outcome === 'ok' ? kv('Read', grouped(c.in) + ' tokens') + (c.cached ? kv('Of that, reused from a moment before', grouped(c.cached) + ' tokens') : '') +
