@@ -65,6 +65,15 @@
 // every opening, and the words are held in memory only: never in this
 // browser's storage, and gone when the sheet closes or the sign-in ends.
 //
+// THE COACH TAB (owner, Oct 13 2026: "build out the coach tab as described").
+// What ran (owner_coach_read: every model call the log holds, by job, model
+// and person, with sizes and costs and never anyone's words), what the coach
+// is made of (the function owner-coach: for each job, the model it resolves
+// to right now and what it is shown), and one person's coach
+// (owner_person_coach: their coach's voice and dials, and for the owner's own
+// account the coach's notebook). Asked for when the tab or the sheet is
+// opened, never before; held in memory only.
+//
 // TWO HANDS, ONE ROW. A session on the Mac can change an item while it is open
 // here. A save says when this page last saw the row; if the row has changed,
 // the database refuses, the page reads the row again, keeps what was typed
@@ -255,7 +264,11 @@
     sending: false,            // the database is being asked about this sign-in (and, on a new device, to email the code)
     codeSent: false,           // a code was emailed for this sign-in: show the box to type it in
     people: null,              // the people and the invite link, read after the list (null = not read yet)
-    texts: null                // ONE person's texts while their sheet is open; memory only, never stored
+    texts: null,               // ONE person's texts while their sheet is open; memory only, never stored
+    tab: 'home',               // home | coach; memory only
+    coach: null,               // what ran and the sheet, read when the Coach tab is opened
+    coachDays: 7, coachWho: null, coachIdle: false, coachAll: false,
+    pcoach: null               // ONE person's coach while their sheet is open; memory only, never stored
   };
   try { S.sec = JSON.parse(readStore(OPEN) || '{}') || {}; } catch (e) { S.sec = {}; }
   var stack = [];
@@ -344,13 +357,13 @@
   // in an open sheet is kept by whoever called this (S.pending).
   function needSecond() {
     var first = S.stage !== 'second';
-    S.list = null; S.people = null; forgetTexts(); S.stage = 'second'; S.busy = false;
+    S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetCoachTab(); S.stage = 'second'; S.busy = false;
     stack.length = 0; drawSheet();
     if (first) { S.codeSent = false; say(''); drawPage(); secondStart(); } else drawPage();
   }
   // The session is over. Anything being typed is kept and comes back after signing in.
   function signedOut(text) {
-    keepSession(null); S.list = null; S.people = null; forgetTexts(); S.stage = 'signin'; S.busy = false;
+    keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetCoachTab(); S.stage = 'signin'; S.busy = false;
     say(text || 'You are signed out. Sign in again.', 'warn');
     stack.length = 0; drawSheet(); drawPage();
   }
@@ -534,6 +547,232 @@
       '<p class="fine center">Send a friend this link. They install the app and sign in with their own mobile number. You enter nothing.' +
       (inv.cap ? ' The link lets in ' + esc(inv.cap) + ' people in all.' : '') + '</p>' +
       '<button class="btn wide" data-act="invite">Copy invite link</button></section>';
+  }
+
+  /* ---------- the coach ---------- */
+  // THE COACH TAB (owner, Oct 13 2026: "a tab that in real time shows ... what
+  // is in mpmaynard's coach harness and its capabilities"). Two reads, asked
+  // for when the tab is opened and never before:
+  //   owner_coach_read   WHAT RAN: every model call the log holds, by job, by
+  //                      model, by person, with what it read, wrote and cost.
+  //                      The log holds sizes and costs, never anyone's words.
+  //   owner-coach        WHAT THE COACH IS MADE OF: for each job, the model it
+  //                      resolves to right now and, in plain words, what it is
+  //                      shown and what it may change.
+  // The page then checks one against the other and says where they differ.
+  var COACH_DAYS = [1, 7, 30];
+  var coachTurn = 0;
+  var grouped = function (n) { return Math.round(Number(n) || 0).toLocaleString('en-US'); };
+  var compact = function (n) {
+    n = Number(n) || 0;
+    if (n >= 1000000) return (Math.round(n / 100000) / 10) + 'M';
+    if (n >= 10000) return Math.round(n / 1000) + 'K';
+    return grouped(n);
+  };
+  // A cost kept in cents, some of them fractions of one.
+  var money = function (cents) {
+    cents = Number(cents) || 0;
+    if (cents > 0 && cents < 1) return 'under 1¢';
+    return usd(cents / 100);
+  };
+  var secs = function (ms) { return ms == null ? '' : (Math.round(Number(ms) / 100) / 10) + ' s'; };
+  var plural = function (n, one, many) { return grouped(n) + ' ' + (Number(n) === 1 ? one : many); };
+  var sameModel = function (a, b) { a = text(a); b = text(b); return !!a && !!b && (a === b || a.indexOf(b) === 0 || b.indexOf(a) === 0); };
+  // A job's name: the sheet's, or its label with the underscores taken out.
+  function sheetJob(kind) {
+    var sh = S.coach && S.coach.sheet;
+    return sh && sh.jobs ? sh.jobs.filter(function (j) { return j.kind === kind; })[0] || null : null;
+  }
+  function jobName(kind) { var j = sheetJob(kind); return j ? j.name : text(kind).replace(/_/g, ' '); }
+  // Why a call did not run, in his words.
+  function reasonWords(reason) {
+    var r = text(reason);
+    if (r.indexOf('call_cap:') === 0) return 'Stopped by the daily limit on calls';
+    if (r.indexOf('token_budget:') === 0) return 'Stopped by the day’s token allowance';
+    if (r.indexOf('retrying:') === 0) return 'Failed once and was tried again';
+    return {
+      credits_exhausted: 'The AI account was out of credits',
+      ai_paused: 'AI was paused by the kill switch',
+      breaker_open: 'Paused after repeated failures',
+      global_cap: 'Stopped by the limit across everyone',
+      global_token_cap: 'Stopped by the token limit across everyone',
+      ai_disabled: 'Live AI was switched off',
+      exception: 'The function failed before the model answered',
+      unknown: 'No reason was recorded'
+    }[r] || r;
+  }
+  var STOP_WORDS = { end_turn: 'Finished', max_tokens: 'Ran out of room', length: 'Ran out of room', tool_use: 'Filled in its form', stop_sequence: 'Finished' };
+  var RUNG_WORDS = { R0: 'Full', R1: 'Trimmed (half the day’s allowance used)', R2: 'Trimmed, on the lighter model', R3: 'No model' };
+
+  function loadCoach() {
+    var mine = gen, turn = ++coachTurn;
+    var had = S.coach || {};
+    S.coach = { loading: true, data: had.data || null, sheet: had.sheet || null, sheetState: had.sheetState || '' };
+    if (S.stage === 'list') drawPage();
+    rpc('owner_coach_read', { _user: S.coachWho || null, _days: S.coachDays }).then(function (r) {
+      if (mine !== gen || turn !== coachTurn || !S.coach) return;
+      if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
+      if (SECOND(r)) { needSecond(); return; }
+      S.coach.loading = false;
+      if (r.ok && r.data && r.data.totals) { S.coach.data = r.data; S.coach.failed = ''; }
+      else S.coach.failed = r.status === 404 ? 'missing' : (r.status === 0 ? 'No answer came back. Tap Refresh.' : 'What ran could not be read just now.');
+      if (S.stage === 'list') drawPage();
+    });
+    // The sheet is asked for once, and again only when he taps Refresh: the
+    // one already here stays on screen until the new one arrives.
+    if (S.coach.sheet && !had.stale) return;
+    authed('/functions/v1/owner-coach', {}).then(function (r) {
+      if (mine !== gen || !S.coach) return;
+      if (r.ok && r.data && r.data.sheet && r.data.sheet.jobs) { S.coach.sheet = r.data.sheet; S.coach.sheetState = ''; }
+      else if (!S.coach.sheet) S.coach.sheetState = r.status === 404 ? 'missing' : 'failed';
+      if (S.stage === 'list') { drawPage(); if (stack.length) drawSheet(); }
+    });
+  }
+  function forgetCoachTab() { coachTurn++; S.coach = null; S.coachWho = null; }
+
+  function callRow(c) {
+    var who = c.who || (c.team ? 'A team' : (c.user ? 'No name yet' : 'The system'));
+    var bad = c.outcome !== 'ok';
+    var line = bad ? reasonWords(c.reason)
+      : (c.model || 'no model') + ' · read ' + grouped(c.in) + ' · wrote ' + grouped(c.out) + ' · ' + money(c.cost_cents);
+    return '<button class="row" data-act="call" data-id="' + esc(c.id) + '"><span class="grow"><b>' + esc(jobName(c.kind)) + ' · ' + esc(who) + '</b>' +
+      '<small>' + esc(when(c.at)) + ' · ' + esc(line) + '</small></span>' +
+      (c.outcome === 'error' ? '<span class="chip bad">Failed</span>' : c.outcome === 'blocked' ? '<span class="chip warn">Blocked</span>' : c.cut_short ? '<span class="chip warn">Cut short</span>' : '') +
+      '<i class="chev"></i></button>';
+  }
+  // Where the log and the sheet disagree about a job's model, in this window.
+  function modelNotes(D, sh) {
+    if (!D || !sh || !sh.jobs) return [];
+    return D.jobs.map(function (j) {
+      var s = sh.jobs.filter(function (x) { return x.kind === j.kind; })[0];
+      if (!s) return j.calls ? 'A job the sheet does not know ran: ' + text(j.kind).replace(/_/g, ' ') + '.' : '';
+      var other = (j.models || []).filter(function (m) { return !sameModel(m, s.model) && !sameModel(m, s.model_lite); });
+      return other.length ? s.name + ' also ran on ' + other.join(' and ') + '.' : '';
+    }).filter(Boolean);
+  }
+  function viewTabs() {
+    return '<div class="pair tabs"><button class="btn small' + (S.tab !== 'coach' ? ' on' : '') + '" data-act="tab" data-id="home">Dashboard</button>' +
+      '<button class="btn small' + (S.tab === 'coach' ? ' on' : '') + '" data-act="tab" data-id="coach">Coach</button></div>';
+  }
+  function viewCoach() {
+    var C = S.coach || {}, D = C.data, sh = C.sheet;
+    if (!D) {
+      if (C.failed === 'missing') return '<section class="card"><h2 class="card-title">The coach</h2><p class="fine center">This is not switched on yet.</p></section>';
+      return '<section class="card"><h2 class="card-title">The coach</h2><p class="fine center">' + (C.failed ? esc(C.failed) : 'Reading.') + '</p></section>';
+    }
+    var T = D.totals, person = D.person;
+    var span = '<div class="three">' + COACH_DAYS.map(function (n) {
+      return '<button class="btn small' + (S.coachDays === n ? ' on' : '') + '" data-act="coachdays" data-id="' + n + '">' + (n === 1 ? '1 day' : n + ' days') + '</button>';
+    }).join('') + '</div>';
+    var chips = (T.errors ? '<span class="chip bad num">' + grouped(T.errors) + ' failed</span>' : '') +
+      (T.blocked ? '<span class="chip warn num">' + grouped(T.blocked) + ' blocked</span>' : '') +
+      (T.cut_short ? '<span class="chip warn num">' + grouped(T.cut_short) + ' cut short</span>' : '');
+    var head = '<section class="card"><h2 class="card-title">The coach · last ' + (D.days === 1 ? 'day' : D.days + ' days') + '</h2>' + span +
+      (person ? '<p class="fine center">Only ' + esc(person.name || 'this person') + '.</p><button class="link" data-act="coachall">Show everyone</button>' : '') +
+      '<p class="stat' + (T.errors ? '' : ' calm') + '">' + esc(money(T.cost_cents)) + ' · ' + esc(plural(T.calls, 'call', 'calls')) + '</p>' +
+      (chips ? '<div class="chips mid">' + chips + '</div>' : '') +
+      '<p class="fine center">It read ' + esc(compact(T.tokens_in)) + ' tokens and wrote ' + esc(compact(T.tokens_out)) + '. A token is about three quarters of a word.</p>' +
+      (C.failed ? '<p class="msg-line warn" role="alert">' + esc(C.failed) + '</p>' : '') + '</section>';
+
+    var trouble = '';
+    if (D.problems.length || T.cut_short) {
+      var cut = D.jobs.filter(function (j) { return j.cut_short; }).map(function (j) { return jobName(j.kind) + ' ' + j.cut_short; });
+      trouble = '<section class="card verdict"><h2 class="card-title">Needs a look</h2><div class="list">' +
+        D.problems.map(function (p) {
+          return '<div class="row"><span class="grow"><b>' + esc(reasonWords(p.reason)) + '</b><small>' + esc(plural(p.calls, 'time', 'times')) + ' · ' +
+            esc((p.jobs || []).map(jobName).join(', ')) + ' · last ' + esc(when(p.last_at)) + '</small></span>' +
+            '<span class="chip ' + (p.outcome === 'error' ? 'bad' : 'warn') + '">' + (p.outcome === 'error' ? 'Failed' : 'Blocked') + '</span></div>';
+        }).join('') +
+        (T.cut_short ? '<div class="row"><span class="grow"><b>Ran out of room before finishing</b><small>' + esc(cut.join(', ')) + '</small></span><span class="chip warn">Cut short</span></div>' : '') +
+        '</div></section>';
+    }
+
+    var jobs = D.jobs.map(function (j) {
+      var flag = j.errors ? '<span class="chip bad num">' + j.errors + ' failed</span>' : (j.blocked || j.cut_short) ? '<span class="chip warn num">' + (j.blocked ? j.blocked + ' blocked' : j.cut_short + ' cut short') + '</span>' : '';
+      return '<button class="row" data-act="job" data-id="' + esc(j.kind) + '"><span class="grow"><b>' + esc(jobName(j.kind)) + '</b><small>' +
+        esc(plural(j.calls, 'call', 'calls')) + ((j.models || []).length ? ' · ' + esc(j.models.join(', ')) : '') + ' · ' + esc(money(j.cost_cents)) + '</small></span>' + flag + '<i class="chev"></i></button>';
+    }).join('');
+    var ran = {};
+    D.jobs.forEach(function (j) { ran[j.kind] = true; });
+    var idle = sh && sh.jobs ? sh.jobs.filter(function (j) { return !ran[j.kind]; }) : [];
+    var idleList = idle.length ? '<button class="link" data-act="coachidle">' + (S.coachIdle ? 'Hide the rest' : 'Jobs that did not run · ' + idle.length) + '</button>' +
+      (S.coachIdle ? '<div class="list">' + idle.map(function (j) {
+        return '<button class="row" data-act="job" data-id="' + esc(j.kind) + '"><span class="grow"><b>' + esc(j.name) + '</b><small>' + esc(j.family) + ' · ' + esc(j.model) + '</small></span><i class="chev"></i></button>';
+      }).join('') + '</div>' : '') : '';
+    var jobsCard = '<section class="card"><h2 class="card-title">Jobs · ' + D.jobs.length + '</h2>' +
+      '<p class="fine center">Each thing the coach does, costliest first. Tap one to see what it is shown and what it may change.</p>' +
+      (jobs ? '<div class="list">' + jobs + '</div>' : '<p class="fine center">Nothing ran in this time.</p>') + idleList + '</section>';
+
+    var models = '';
+    if (sh && sh.jobs) {
+      var of = function (kind) { var j = sh.jobs.filter(function (x) { return x.kind === kind; })[0]; return j ? j.model : ''; };
+      var lite = function (kind) { var j = sh.jobs.filter(function (x) { return x.kind === kind; })[0]; return j ? j.model_lite : ''; };
+      var kv = function (k, v) { return v ? '<div class="kv"><span>' + esc(k) + '</span><b>' + esc(v) + '</b></div>' : ''; };
+      var notes = modelNotes(D, sh);
+      var set = (sh.switches || []).filter(function (x) { return x.set && x.name.indexOf('AI_MODEL') === 0 || x.set && x.name.indexOf('AI_EFFORT') === 0; });
+      models = '<section class="card"><h2 class="card-title">Models right now</h2><div class="list">' +
+        kv('Texts', of('reply')) + kv('Plans', of('plan')) + kv('The star', of('day_rework')) + kv('Weekly review', of('reflection')) + kv('Team texts', of('group_reply')) +
+        kv('A reply trimmed to save', lite('reply')) + kv('Provider', sh.provider) +
+        set.map(function (x) { return kv('Set on the dashboard: ' + x.name, x.value || 'set'); }).join('') + '</div>' +
+        '<p class="fine center">' + (notes.length ? esc('In this time: ' + notes.join(' ')) : 'Checked against the log: every job ran on a model this sheet names.') + '</p>' +
+        '<p class="fine center">Sheet ' + esc(sh.version) + ' · app facts ' + esc(sh.facts_version) + '</p></section>';
+    } else if (C.sheetState === 'failed') {
+      models = '<section class="card"><h2 class="card-title">Models right now</h2><p class="fine center">The sheet could not be read just now. What ran, above, is not affected.</p></section>';
+    }
+
+    var people = !person && D.people.length ? '<section class="card"><h2 class="card-title">Who it ran for</h2><div class="list">' + D.people.map(function (p) {
+      return '<button class="row" data-act="coachwho" data-id="' + esc(p.id) + '"><span class="grow"><b>' + esc(p.name || 'No name yet') + '</b><small>' + esc(plural(p.calls, 'call', 'calls')) + '</small></span><span class="chip num">' + esc(money(p.cost_cents)) + '</span><i class="chev"></i></button>';
+    }).join('') + '</div><p class="fine center">Tap a person to see only what ran for them. Timers and team texts are not anyone’s.</p></section>' : '';
+
+    var shown = S.coachAll ? D.recent : D.recent.slice(0, 12);
+    var recent = '<section class="card"><h2 class="card-title">Recent calls</h2>' +
+      (shown.length ? '<div class="list">' + shown.map(callRow).join('') + '</div>' : '<p class="fine center">Nothing ran in this time.</p>') +
+      (D.recent.length > 12 ? '<button class="link" data-act="coachmore">' + (S.coachAll ? 'Show fewer' : 'Show the last ' + D.recent.length) + '</button>' : '') +
+      '<p class="fine center">The log keeps sizes, costs and how each call ended. It does not keep what was sent to the model or what it wrote.</p></section>';
+
+    var days = D.by_day.length > 1 ? '<section class="card"><h2 class="card-title">By day</h2><div class="list">' + D.by_day.slice().reverse().map(function (x) {
+      return '<div class="kv"><span>' + esc(day(fromIso(x.day))) + ' · ' + esc(plural(x.calls, 'call', 'calls')) + '</span><b>' + esc(money(x.cost_cents)) + '</b></div>';
+    }).join('') + '</div></section>' : '';
+
+    return head + trouble + jobsCard + recent + people + models + days;
+  }
+
+  // ONE PERSON'S COACH: their coach's voice and dials, the weekly reviews
+  // that ran for them, and (for the owner's own account) the coach's notebook.
+  // Asked for by a tap; the database records an opening that shows a notebook;
+  // the answer lives in memory only and is forgotten when its sheet closes.
+  var pcoachTurn = 0;
+  function forgetCoach() { pcoachTurn++; S.pcoach = null; }
+  function loadPersonCoach(id) {
+    var mine = gen, turn = ++pcoachTurn;
+    S.pcoach = { id: id, loading: true };
+    drawSheet();
+    rpc('owner_person_coach', { _user: id }).then(function (r) {
+      if (mine !== gen || turn !== pcoachTurn) return;
+      if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
+      if (SECOND(r)) { needSecond(); return; }
+      if (r.ok && r.data && r.data.id) S.pcoach = { id: id, data: r.data, open: {} };
+      else S.pcoach = { id: id, failed: r.status === 404 ? 'This is not switched on yet.' : textsWhy(r).replace('The texts', 'Their coach') };
+      drawSheet();
+    });
+  }
+  var NB_ORDER = ['summary', 'coaching_brief', 'judgment', 'week_review', 'next_week_plan_seed', 'week_shape', 'insights', 'goal_campaigns', 'declared_goals', 'long_term_goals',
+    'capabilities', 'preferences', 'constraints', 'standing_rules', 'coaching_notes', 'followups', 'memory'];
+  var nbWords = function (k) { var w = text(k).replace(/_/g, ' '); return w.charAt(0).toUpperCase() + w.slice(1); };
+  // The notebook is whatever the coach wrote, so it is drawn by its shape: a
+  // line, a list, or named parts. Every word is escaped.
+  function nbValue(v, depth) {
+    if (v === null || v === undefined || v === '') return '';
+    if (typeof v !== 'object') return '<p>' + esc(v) + '</p>';
+    if (depth > 6) return '<p>' + esc(JSON.stringify(v)) + '</p>';
+    if (Array.isArray(v)) {
+      var items = v.map(function (x) { var inner = x !== null && typeof x === 'object' ? nbValue(x, depth + 1) : (x === null || x === '' ? '' : '<p>' + esc(x) + '</p>'); return inner ? '<li>' + inner + '</li>' : ''; }).join('');
+      return items ? '<ul class="nb">' + items + '</ul>' : '';
+    }
+    return Object.keys(v).map(function (k) {
+      var inner = nbValue(v[k], depth + 1);
+      return inner ? '<div class="nbk"><span class="micro muted">' + esc(nbWords(k)) + '</span>' + inner + '</div>' : '';
+    }).join('');
   }
 
   function viewList() {
@@ -735,6 +974,7 @@
         '</div>' +
         '<button class="btn wide" data-act="texts" data-id="' + esc(q.id) + '">Read their texts</button>' +
         '<p class="fine center">Their texts with the coach. Each time you open them, it is recorded.</p>' +
+        '<button class="btn wide" data-act="pcoach" data-id="' + esc(q.id) + '">' + (q.you ? 'Your coach' : 'Their coach') + '</button>' +
         '<button class="btn wide" data-act="close">Close</button></div>' };
     },
     // One person's texts with the coach, oldest first. Read only.
@@ -764,6 +1004,105 @@
         '<p class="fine center">This opening is on the record. The texts are not kept on this device.</p>' +
         '<button class="btn wide" data-act="close">Close</button></div>' };
     },
+    // ONE JOB of the coach: what it is for (the sheet), the model it resolves
+    // to right now, and how it did in the time shown.
+    job: function (a) {
+      var C = S.coach || {}, D = C.data, j = sheetJob(a.id);
+      var ran = D ? D.jobs.filter(function (x) { return x.kind === a.id; })[0] : null;
+      if (!j && !ran) return null;
+      var kv = function (k, v) { return v === '' || v === null || v === undefined ? '' : '<div class="kv"><span>' + esc(k) + '</span><b>' + esc(v) + '</b></div>'; };
+      var list = function (items) { return '<ul class="nb">' + items.map(function (x) { return '<li><p>' + esc(x) + '</p></li>'; }).join('') + '</ul>'; };
+      var about = j ? '<div class="chips"><span class="chip">' + esc(j.family) + '</span></div>' +
+        '<div class="list">' + kv('Runs on', j.model) + (j.model_lite && j.model_lite !== j.model ? kv('When trimmed to save', j.model_lite) : '') +
+          kv('Thinking, set on the dashboard', j.effort || 'not set') + '</div>' +
+        '<div class="nbk"><span class="micro muted">When it runs</span><p>' + esc(j.when) + '</p></div>' +
+        '<div class="nbk"><span class="micro muted">What it is shown</span>' + list(j.reads) + '</div>' +
+        '<div class="nbk"><span class="micro muted">What it may change</span>' + (j.may.length ? list(j.may) : '<p>Nothing. It can only write words.</p>') + '</div>' +
+        '<div class="nbk"><span class="micro muted">Where its words go</span><p>' + esc(j.lands) + '</p></div>'
+        : '<p class="fine">' + (C.sheetState === 'failed' ? 'The sheet could not be read just now, so only the numbers are shown.' : 'The sheet has no words for this job yet.') + '</p>';
+      var nums = ran ? '<div class="list">' + kv('Calls, last ' + (D.days === 1 ? 'day' : D.days + ' days'), grouped(ran.calls)) +
+        (ran.blocked ? kv('Blocked', grouped(ran.blocked)) : '') + (ran.errors ? kv('Failed', grouped(ran.errors)) : '') + (ran.cut_short ? kv('Cut short', grouped(ran.cut_short)) : '') +
+        kv('It ran on', (ran.models || []).join(', ')) +
+        (ran.avg_in !== null ? kv('Read, on average', grouped(ran.avg_in) + ' tokens') + kv('Wrote, on average', grouped(ran.avg_out) + ' tokens') + kv('Took, on average', secs(ran.avg_ms)) : '') +
+        kv('Cost', money(ran.cost_cents)) + '</div>' : '<p class="fine">It did not run in the time shown.</p>';
+      var calls = D ? D.recent.filter(function (c) { return c.kind === a.id; }).slice(0, 8) : [];
+      return { full: true, html: '<div class="sheet swap" role="dialog" aria-modal="true" aria-label="Job">' +
+        '<h2 class="name">' + esc(j ? j.name : jobName(a.id)) + '</h2>' + about + nums +
+        (calls.length ? '<div class="list">' + calls.map(callRow).join('') + '</div>' : '') +
+        '<button class="btn wide" data-act="close">Close</button></div>' };
+    },
+    // ONE CALL, as the log has it. Sizes and costs; never the words.
+    call: function (a) {
+      var D = S.coach && S.coach.data, c = D ? D.recent.filter(function (x) { return String(x.id) === String(a.id); })[0] : null;
+      if (!c) return null;
+      var kv = function (k, v) { return v === '' || v === null || v === undefined ? '' : '<div class="kv"><span>' + esc(k) + '</span><b>' + esc(v) + '</b></div>'; };
+      var ended = c.outcome === 'ok' ? (STOP_WORDS[c.stop] || text(c.stop) || 'Finished') : (c.outcome === 'blocked' ? 'Blocked: ' : 'Failed: ') + reasonWords(c.reason);
+      return { full: true, html: '<div class="sheet swap" role="dialog" aria-modal="true" aria-label="Call">' +
+        '<h2 class="name">' + esc(jobName(c.kind)) + '</h2>' +
+        '<div class="chips">' + (c.outcome === 'error' ? '<span class="chip bad">Failed</span>' : c.outcome === 'blocked' ? '<span class="chip warn">Blocked</span>' : c.cut_short ? '<span class="chip warn">Cut short</span>' : '<span class="chip">Ran</span>') + '</div>' +
+        '<div class="list">' +
+          kv('When', when(c.at)) + kv('For', c.who || (c.team ? 'A team' : (c.user ? 'No name yet' : 'The system'))) +
+          kv('Model', c.model) + kv('Thinking', c.effort) + (c.rung ? kv('How much it was given', RUNG_WORDS[c.rung] || c.rung) : '') +
+          kv('How it ended', ended) +
+          (c.outcome === 'ok' ? kv('Read', grouped(c.in) + ' tokens') + (c.cached ? kv('Of that, reused from a moment before', grouped(c.cached) + ' tokens') : '') +
+            kv('Wrote', grouped(c.out) + ' tokens' + (c.max_tokens ? ' of ' + grouped(c.max_tokens) + ' allowed' : '')) +
+            kv('Cost', money(c.cost_cents)) + kv('Took', secs(c.ms)) : '') +
+          (c.system_chars !== null ? kv('Standing instructions', grouped(c.system_chars) + ' characters') : '') +
+          (c.turn_chars !== null ? kv('The conversation part', grouped(c.turn_chars) + ' characters' + (c.turns ? ' in ' + plural(c.turns, 'turn', 'turns') : '')) : '') +
+          (c.window_days !== null || c.window_msgs !== null ? kv('Memory of the conversation', (c.window_days !== null ? plural(c.window_days, 'day', 'days') : '') + (c.window_days !== null && c.window_msgs !== null ? ', ' : '') + (c.window_msgs !== null ? plural(c.window_msgs, 'text', 'texts') : '')) : '') +
+          kv('Function', c.fn) +
+        '</div>' +
+        '<button class="btn wide" data-act="job" data-id="' + esc(c.kind) + '">What this job is shown</button>' +
+        '<p class="fine center">The log keeps sizes and costs, not the words that were sent or written.</p>' +
+        '<button class="btn wide" data-act="close">Close</button></div>' };
+    },
+    // One person's coach. Read only.
+    pcoach: function (a) {
+      var T = S.pcoach, P = S.people;
+      if (!T || T.id !== a.id) return null;
+      var q = P && P.people ? P.people.filter(function (x) { return x.id === a.id; })[0] : null;
+      var who = q ? (q.name || 'No name yet') : 'This person';
+      var D = T.data, body;
+      var kv = function (k, v) { return v === '' || v === null || v === undefined ? '' : '<div class="kv"><span>' + esc(k) + '</span><b>' + esc(v) + '</b></div>'; };
+      if (D) {
+        var c = D.coach;
+        var coach = c ? '<div class="list">' + kv('Coach', c.name) + kv('Voice', nbWords(c.preset)) +
+          kv('Harshness', c.harshness) + kv('Humor', c.humor) + kv('Formality', c.formality) +
+          kv('Brainpower', c.brainpower ? nbWords(c.brainpower) : 'Standard') + kv('Thinking', c.effort) + '</div>' +
+          (c.style_notes ? '<div class="nbk"><span class="micro muted">' + (D.you ? 'Your' : 'Their') + ' notes on the coach\u2019s style</span><p>' + esc(c.style_notes) + '</p></div>' : '') +
+          (c.goals ? '<div class="nbk"><span class="micro muted">' + (D.you ? 'Your' : 'Their') + ' stated goals</span><p>' + esc(c.goals) + '</p></div>' : '')
+          : '<p class="fine">They have not set up a coach yet.</p>';
+        var reviews = D.reviews.length ? '<div class="nbk"><span class="micro muted">Weekly reviews</span><div class="list">' + D.reviews.map(function (r) {
+          return '<div class="kv"><span>Week to ' + esc(day(fromIso(r.week_end))) + ' · try ' + esc(r.attempt) + '</span><b>' + esc(nbWords(r.status)) + (r.model ? ' · ' + esc(r.model) : '') + '</b></div>';
+        }).join('') + '</div></div>' : '';
+        var nb;
+        if (D.notebook) {
+          var keys = Object.keys(D.notebook);
+          keys.sort(function (x, y) { var i = NB_ORDER.indexOf(x), j = NB_ORDER.indexOf(y); return (i < 0 ? 99 : i) - (j < 0 ? 99 : j) || (x < y ? -1 : 1); });
+          nb = '<h2 class="card-title">The coach’s notebook</h2>' +
+            '<p class="fine center">What the coach has written down about ' + (D.you ? 'you' : 'them') + (D.notebook_at ? ', last changed ' + esc(when(D.notebook_at)) : '') + '. The weekly review rewrites it; texts add to it.</p>' +
+            '<div class="sugs">' + keys.map(function (k) {
+              var inner = nbValue(D.notebook[k], 0), open = !!T.open[k];
+              return inner ? '<div class="grp' + (open ? ' open' : '') + '"><button class="grp-head" data-act="nbsec" data-id="' + esc(k) + '" aria-expanded="' + open + '"><span class="grow"><span class="ttl">' + esc(nbWords(k)) + '</span></span><i class="chev"></i></button>' +
+                '<div class="sug-body"><div><div class="grp-in nbin">' + inner + '</div></div></div></div>' : '';
+            }).join('') + '</div>' +
+            (D.left_out.length ? '<p class="fine center">Left out: what comes from the watch and Apple Health.</p>' : '') +
+            '<p class="fine center">This opening is on the record. The notebook is not kept on this device.</p>';
+        } else if (D.notebook_held === 'policy') {
+          nb = '<p class="fine center">Their coach’s notebook is not shown. The privacy policy covers their account and their texts, not the notes the coach keeps.</p>';
+        } else {
+          nb = '<p class="fine center">The coach has not written a notebook for ' + (D.you ? 'you' : 'them') + ' yet.</p>';
+        }
+        body = coach + reviews + nb + '<button class="btn wide" data-act="coachwhogo" data-id="' + esc(a.id) + '">What ran for ' + (D.you ? 'you' : 'them') + '</button>';
+      } else if (T.failed) {
+        body = '<p class="msg-line warn" role="alert">' + esc(T.failed) + '</p><button class="btn wide" data-act="pcoachagain" data-id="' + esc(a.id) + '">Try again</button>';
+      } else {
+        body = '<p class="fine center">Reading.</p>';
+      }
+      return { full: true, html: '<div class="sheet swap" role="dialog" aria-modal="true" aria-label="Their coach">' +
+        '<h2 class="name">' + esc(who) + '</h2>' + body +
+        '<button class="btn wide" data-act="close">Close</button></div>' };
+    },
     // Copying was refused by the browser: show the link to press and hold.
     invitelink: function () {
       var inv = S.people && S.people.invite;
@@ -786,6 +1125,7 @@
     // A person's texts are forgotten the moment their sheet is closed: no texts
     // sheet open means nobody's texts are held, whichever way it was closed.
     if (S.texts && !stack.some(function (e) { return e.kind === 'texts'; })) forgetTexts();
+    if (S.pcoach && !stack.some(function (e) { return e.kind === 'pcoach'; })) forgetCoach();
     var top = stack.length ? stack[stack.length - 1] : null;
     var s = top && S.list ? SHEETS[top.kind](top) : null;
     if (top && !s) { stack.length = 0; top = null; }
@@ -831,7 +1171,7 @@
     else if (S.stage === 'offline') v.innerHTML = '<section class="card"><h1 class="card-title">No connection</h1><p class="fine center">The list could not be reached. Nothing is lost: it is kept in the database.</p><button class="btn wide" data-act="reload">Try again</button></section>';
     else if (S.stage === 'notowner') v.innerHTML = '<section class="card"><h1 class="card-title">Not the owner</h1><p class="fine center">This page opens only for the owner of CountAble. The account you signed in with is not it.</p><button class="btn wide" data-act="signoutgo">Sign out</button></section>';
     else if (S.stage === 'second') v.innerHTML = viewSecond();
-    else if (S.stage === 'list' && S.list) v.innerHTML = viewList();
+    else if (S.stage === 'list' && S.list) v.innerHTML = viewTabs() + (S.tab === 'coach' ? viewCoach() : viewList());
     else v.innerHTML = viewSignIn();
   }
 
@@ -848,6 +1188,8 @@
       if (r.ok && r.data && r.data.sections) {
         S.list = r.data; S.asOf = new Date(); S.stage = 'list';
         loadPeople();
+        // The Coach tab is read again with the list while it is the one showing.
+        if (S.tab === 'coach' && !(S.coach && S.coach.loading)) loadCoach();
         // Typing that was kept across a sign-out comes back.
         if (S.pending) { var kept = S.pending; S.pending = null; stack.length = 0; stack.push(kept); drawSheet(); }
       } else if (r.status === 401) {
@@ -1013,12 +1355,12 @@
     },
     secondagain: function () { say(''); secondStart(); },
     reload: function () { S.stage = 'opening'; drawPage(); load(); },
-    refresh: function () { load().then(function (r) { if (r.ok) toast('Up to date'); }); },
+    refresh: function () { if (S.coach) S.coach.stale = true; load().then(function (r) { if (r.ok) toast('Up to date'); }); },
     signout: function () { openSheet('signout'); },
     signoutgo: function (d) {
       var token = session && session.access_token, everywhere = !!(d && d.all);
       gen++;                                   // every call still in the air is now too late to matter
-      keepSession(null); S.list = null; S.people = null; forgetTexts(); S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
+      keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetCoachTab(); S.tab = 'home'; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
       stack.length = 0; drawSheet(); drawPage();
       if (!token) return;
       // First the database forgets that this sign-in passed (or, for every
@@ -1107,6 +1449,30 @@
         navigator.clipboard.writeText(inv.link).then(function () { toast('Invite link copied'); }, function () { openSheet('invitelink'); });
       } catch (e) { openSheet('invitelink'); }
     },
+
+    // The Coach tab. Its two reads are asked for here, when it is opened.
+    tab: function (d) {
+      S.tab = d.id === 'coach' ? 'coach' : 'home';
+      if (S.tab === 'coach' && !(S.coach && (S.coach.data || S.coach.loading))) loadCoach(); else drawPage();
+    },
+    coachdays: function (d) { var n = Number(d.id); if (COACH_DAYS.indexOf(n) < 0 || n === S.coachDays) return; S.coachDays = n; loadCoach(); },
+    coachwho: function (d) { if (!d.id) return; S.coachWho = d.id; loadCoach(); },
+    coachall: function () { S.coachWho = null; loadCoach(); },
+    coachidle: function () { S.coachIdle = !S.coachIdle; drawPage(); },
+    coachmore: function () { S.coachAll = !S.coachAll; drawPage(); },
+    job: function (d) { if (d.id) openSheet('job', { id: d.id }); },
+    call: function (d) { if (d.id) openSheet('call', { id: d.id }); },
+    // One person's coach: asked for here, by this tap, and nowhere else.
+    pcoach: function (d) { if (!d.id) return; stack.push({ kind: 'pcoach', id: d.id }); loadPersonCoach(d.id); },
+    pcoachagain: function (d) { if (S.pcoach && S.pcoach.id === d.id && !S.pcoach.loading) loadPersonCoach(d.id); },
+    nbsec: function (d, el) {
+      if (!S.pcoach || !S.pcoach.open) return;
+      S.pcoach.open[d.id] = !S.pcoach.open[d.id];
+      el.closest('.grp').classList.toggle('open', S.pcoach.open[d.id]);
+      el.setAttribute('aria-expanded', String(S.pcoach.open[d.id]));
+    },
+    // From a person's coach to what ran for them.
+    coachwhogo: function (d) { if (!d.id) return; S.coachWho = d.id; S.tab = 'coach'; closeAll(); loadCoach(); },
 
     // An alarm, seen.
     seen: function (d) { openSheet('seen', { id: d.id }); },

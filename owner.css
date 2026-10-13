@@ -111,6 +111,15 @@ ol{list-style:none}
 .say small{font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--w70);overflow-wrap:anywhere}
 .say p{font-size:15px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere;-webkit-user-select:text;user-select:text}
 
+/* the coach: a job's bullets, a notebook's named parts */
+.tabs .btn{width:100%}
+ul.nb{margin:0;padding:0 0 0 18px;display:flex;flex-direction:column;gap:6px;min-width:0}
+ul.nb li{min-width:0}
+.nbk{display:flex;flex-direction:column;gap:6px;padding:8px 0;min-width:0}
+.nbk + .nbk{border-top:1px solid var(--hair)}
+.nbk p,ul.nb p{font-size:14px;line-height:1.4;overflow-wrap:anywhere;-webkit-user-select:text;user-select:text}
+.nbin{padding:4px 12px 10px}
+
 /* lists */
 .list{display:flex;flex-direction:column;min-width:0}
 .row{display:flex;align-items:center;gap:12px;min-width:0;padding:12px 0;width:100%}
