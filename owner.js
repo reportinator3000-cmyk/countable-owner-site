@@ -384,9 +384,14 @@
     weekly_review: 'A weekly review used up its retries and never ran',
     delivery: 'Texts are not reaching phones',
     report: 'The twice-daily report is not landing',
+    coaching_credit: 'Your coaching credit is low',
     spend_tripwire: 'Today\u2019s AI spend passed your tripwire'
   };
+  // His own coaching credit is told at three marks, and the alarm carries
+  // which one (owner, Oct 13 2026: "yes add the warning"; owner_alerts.ts).
+  var CREDIT_MARKS = { low: 'Your coaching credit is low', nearly_spent: 'Your coaching credit is nearly spent', spent: 'Your coaching credit is spent' };
   function alarmTitle(a) {
+    if (a.condition === 'coaching_credit' && Object.prototype.hasOwnProperty.call(CREDIT_MARKS, a.ref)) return CREDIT_MARKS[a.ref];
     if (a.condition === 'followup_due') {
       var all = (S.list.followups || []).concat(S.list.followups_done || []);
       var f = all.filter(function (x) { return 'F' + x.ref_no === a.ref; })[0];
