@@ -99,6 +99,8 @@ ol{list-style:none}
 .dot.s-new{background:hsl(200 80% 66%)}
 .dot.s-steady{background:var(--fg)}
 .dot.s-thriving{background:var(--stat)}
+/* paused (Oct 14 2026): a ring, not a fill: nothing is happening with them */
+.dot.s-paused{background:transparent;box-shadow:inset 0 0 0 2px var(--muted)}
 .chip.on{border-color:hsla(35,85%,60%,.55);color:var(--amber);background:hsla(35,85%,60%,.1)}
 .chip.gold{border-color:rgba(253,224,71,.5);color:var(--stat);background:rgba(133,77,14,.25)}
 /* a button that is switched on */
@@ -121,6 +123,39 @@ ul.nb li{min-width:0}
 .nbin{padding:4px 12px 10px}
 /* what a model was sent, kept as it was written */
 .pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.45;-webkit-user-select:text;user-select:text}
+
+/* the documents (the Costs and Marketing tabs, Oct 14 2026): a write-up read
+   on a phone. The words wrap; only a wide table scrolls, sideways, inside its
+   own box, so the page itself never does. */
+.md{display:flex;flex-direction:column;gap:12px;min-width:0;-webkit-user-select:text;user-select:text}
+.md > *{min-width:0;margin:0}
+.md h2,.md h3,.md h4,.md h5{margin:0;overflow-wrap:anywhere;text-wrap:balance}
+.md .md-h1{font-size:17px;line-height:1.25;font-weight:900;letter-spacing:1px;text-transform:uppercase;text-align:center}
+.md .md-h2{font-size:15px;line-height:1.3;font-weight:900;letter-spacing:.08em;text-transform:uppercase;color:var(--amber);padding-top:12px;border-top:1px solid var(--hair)}
+.md .md-h3{font-size:15px;line-height:1.3;font-weight:800;color:var(--fg);padding-top:4px}
+.md .md-h4{font-size:14px;line-height:1.3;font-weight:800;color:var(--w80)}
+.md p,.md li{font-size:15px;line-height:1.5;overflow-wrap:anywhere}
+.md b{font-weight:800}
+.md a{color:var(--amber);text-underline-offset:3px;overflow-wrap:anywhere}
+.md code{font-size:.92em;background:var(--w10);border:1px solid var(--hair);border-radius:5px;padding:0 4px;overflow-wrap:anywhere}
+.md ul,.md ol{margin:0;padding:0 0 0 22px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.md ul{list-style:disc}
+.md ol{list-style:decimal}
+.md li{min-width:0}
+.md li > ul,.md li > ol,.md li > p + p,.md li > p + pre,.md li > p + .md-table{margin-top:6px}
+.md li::marker{color:var(--w60)}
+.md li.md-task{list-style:none;margin-left:-22px}
+.md-box{display:inline-block;width:13px;height:13px;margin:0 8px -1px 0;border:1.5px solid var(--w60);border-radius:3px}
+.md-box.done{background:var(--amber);border-color:var(--amber)}
+.md blockquote{margin:0;padding:10px 12px;border-left:3px solid hsla(35,85%,60%,.55);border-radius:0 12px 12px 0;background:var(--w06);display:flex;flex-direction:column;gap:10px;min-width:0}
+.md hr{width:100%;border:0;border-top:1px solid var(--line);margin:4px 0}
+.md-pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.45 var(--font);background:var(--w06);border:1px solid var(--hair);border-radius:12px;padding:10px 12px;min-width:0}
+.md-table{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;border:1px solid var(--hair);border-radius:12px;background:rgba(0,0,0,.18)}
+.md-table table{border-collapse:collapse;min-width:100%;font-size:13px;line-height:1.35}
+.md-table th,.md-table td{min-width:6.5em;padding:8px 10px;text-align:left;vertical-align:top}
+.md-table.wide th,.md-table.wide td{min-width:9.5em}
+.md-table th{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--w80);background:var(--w06)}
+.md-table tr + tr td,.md-table tbody tr:first-child td{border-top:1px solid var(--hair)}
 
 /* lists */
 .list{display:flex;flex-direction:column;min-width:0}

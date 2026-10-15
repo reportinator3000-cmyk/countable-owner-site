@@ -74,6 +74,17 @@
 // account the coach's notebook). Asked for when the tab or the sheet is
 // opened, never before; held in memory only.
 //
+// THE COSTS AND MARKETING TABS (owner, Oct 14 2026: "putting the cost and
+// marketing docs as tabs in the dashboard would be good"). Two of the
+// business's own write-ups, one per tab. THEIR WORDS ARE NEVER IN THIS FILE,
+// or in any file of this public page: they are rows of the database
+// (owner_docs), read through owner_docs_read behind the same guard as the
+// list, when one of the two tabs is opened and never before. Read only here:
+// a new version is loaded from the Mac (./owner-docs put). Held in memory
+// only, and forgotten at every sign-out. Each is drawn by the small
+// Markdown reader below, which treats the stored words as data: every
+// character is escaped before any tag is put round it.
+//
 // TWO HANDS, ONE ROW. A session on the Mac can change an item while it is open
 // here. A save says when this page last saw the row; if the row has changed,
 // the database refuses, the page reads the row again, keeps what was typed
@@ -265,8 +276,9 @@
     codeSent: false,           // a code was emailed for this sign-in: show the box to type it in
     people: null,              // the people and the invite link, read after the list (null = not read yet)
     texts: null,               // ONE person's texts while their sheet is open; memory only, never stored
-    tab: 'home',               // home | coach; memory only
+    tab: 'home',               // home | coach | cost | marketing; memory only
     coach: null,               // what ran and the sheet, read when the Coach tab is opened
+    docs: null,                // the two documents, read when the Costs or Marketing tab is opened; memory only, never stored
     coachDays: 7, coachWho: null, coachIdle: false, coachAll: false,
     pcoach: null,              // ONE person's coach while their sheet is open; memory only, never stored
     trace: null                // ONE write's record while its sheet is open; memory only, never stored
@@ -358,13 +370,13 @@
   // in an open sheet is kept by whoever called this (S.pending).
   function needSecond() {
     var first = S.stage !== 'second';
-    S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); S.stage = 'second'; S.busy = false;
+    S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); S.stage = 'second'; S.busy = false;
     stack.length = 0; drawSheet();
     if (first) { S.codeSent = false; say(''); drawPage(); secondStart(); } else drawPage();
   }
   // The session is over. Anything being typed is kept and comes back after signing in.
   function signedOut(text) {
-    keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); S.stage = 'signin'; S.busy = false;
+    keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); S.stage = 'signin'; S.busy = false;
     say(text || 'You are signed out. Sign in again.', 'warn');
     stack.length = 0; drawSheet(); drawPage();
   }
@@ -460,11 +472,13 @@
   //   on track   every planned day of this week is done
   //   slipping   under half of this week's planned days done AND away 3 days or more
   //   steady     everyone else
-  var ORDER = ['blocked', 'slipping', 'quiet', 'new', 'steady', 'thriving'];
-  var STATUS_WORDS = { blocked: 'On hold', slipping: 'Slipping', quiet: 'Quiet', new: 'New', steady: 'Steady', thriving: 'On track' };
+  //   paused     you paused their account (they are in the Paused fold)
+  var ORDER = ['blocked', 'slipping', 'quiet', 'new', 'steady', 'thriving', 'paused'];
+  var STATUS_WORDS = { blocked: 'On hold', slipping: 'Slipping', quiet: 'Quiet', new: 'New', steady: 'Steady', thriving: 'On track', paused: 'Paused' };
   function personStatus(p, today) {
     var joined = daysBetween(text(p.joined_at).slice(0, 10), today);
     var away = p.last_active ? daysBetween(p.last_active, today) : null;
+    if (p.paused_at) return 'paused';
     if (p.texts_paused) return 'blocked';
     if (!p.setup_done || joined <= 7) return 'new';
     if (away === null || away >= 7) return 'quiet';
@@ -475,6 +489,7 @@
   function personLine(p, today) {
     var away = p.last_active ? daysBetween(p.last_active, today) : null;
     var opened = away === null ? 'Has not opened the app yet.' : 'Opened ' + agoWords(away) + '.';
+    if (p.paused_at) return 'Paused ' + day(new Date(p.paused_at)) + '. Bring them back from their sheet.';
     if (p.texts_paused) return 'Texts on hold. ' + opened;
     if (!p.setup_done) return 'Setup not finished. ' + opened;
     return (p.week_planned > 0 ? p.week_done + ' of ' + p.week_planned + ' this week. ' : 'No plan this week. ') + opened;
@@ -482,7 +497,7 @@
   var TIERS = { free: 'Free', basic: 'Basic', premium: 'Premium' };
   var PLAN_FROM = { test: 'tester', trial: 'trial', promo: 'code' };
   var SMS_WORDS = { opted_in: 'On', verified_sms_off: 'Off', phone_unverified: 'Number not confirmed', phone_missing: 'No number', opted_out: 'Said STOP' };
-  function textsWord(p) { return p.texts_paused ? 'On hold' : (SMS_WORDS[p.sms_status] || text(p.sms_status) || 'Not known'); }
+  function textsWord(p) { return p.paused_at ? 'Off: account paused' : p.texts_paused ? 'On hold' : (SMS_WORDS[p.sms_status] || text(p.sms_status) || 'Not known'); }
   function personName(p) { return (p.name || 'No name yet') + (p.you ? ' (you)' : ''); }
 
   // Read after the list, and never in its way: if this read fails the page
@@ -506,18 +521,28 @@
     var today = text(P.today), counts = {};
     var rows = P.people.map(function (p, i) { return { p: p, s: personStatus(p, today), i: i }; });
     rows.sort(function (a, b) { return (ORDER.indexOf(a.s) - ORDER.indexOf(b.s)) || (a.i - b.i); });
+    // PAUSED PEOPLE (owner, Oct 14 2026) are folded away under the list, like
+    // used coupons, and come back with one tap on their sheet.
+    var paused = rows.filter(function (x) { return x.s === 'paused'; });
+    rows = rows.filter(function (x) { return x.s !== 'paused'; });
     rows.forEach(function (x) { counts[x.s] = (counts[x.s] || 0) + 1; });
     var tally = ORDER.filter(function (k) { return counts[k]; }).map(function (k) {
       return '<span class="chip"><i class="dot s-' + k + '"></i>' + counts[k] + ' ' + STATUS_WORDS[k] + '</span>';
     }).join('');
-    var list = rows.map(function (x) {
+    var row = function (x) {
       var q = x.p;
       return '<button class="row" data-act="person" data-id="' + esc(q.id) + '"><i class="dot s-' + x.s + '"></i><span class="grow"><b>' + esc(personName(q)) + '</b><small>' + esc(personLine(q, today)) + '</small></span>' +
         '<span class="chip' + (q.tier === 'premium' ? ' gold' : '') + '">' + esc(TIERS[q.tier] || text(q.tier)) + '</span><i class="chev"></i></button>';
-    }).join('');
-    return '<section class="card"><h2 class="card-title">People · ' + P.people.length + '</h2>' +
+    };
+    var list = rows.map(row).join('');
+    var fold = '';
+    if (paused.length) {
+      fold = '<button class="link" data-act="ppast">' + (S.showPaused ? 'Hide paused' : 'Paused · ' + paused.length) + '</button>';
+      if (S.showPaused) fold += '<div class="list">' + paused.map(row).join('') + '</div>';
+    }
+    return '<section class="card"><h2 class="card-title">People · ' + rows.length + '</h2>' +
       (tally ? '<div class="chips mid">' + tally + '</div>' : '') +
-      (list ? '<div class="list">' + list + '</div>' : '<p class="fine center">Nobody has an account yet.</p>') +
+      (list ? '<div class="list">' + list + '</div>' : '<p class="fine center">' + (paused.length ? 'Everyone is paused.' : 'Nobody has an account yet.') + '</p>') + fold +
       '<p class="fine center">Real people only: the accounts made for the films and for Apple’s review are left out. A person’s texts open only when you ask for them.</p></section>';
   }
   // ONE PERSON'S TEXTS WITH THE COACH, asked for by a tap and never before.
@@ -623,9 +648,28 @@
     return (c.sent_at ? 'Sent ' + day(new Date(c.sent_at)) : c.by_hand ? 'Made by hand ' + day(new Date(c.made_at)) : 'Not sent yet') + (c.ends_at ? ' · ends ' + day(new Date(c.ends_at)) : '');
   }
   // The text he sends. Its words name the place in the app as the app does.
-  function couponMessage(c, code, link) {
-    return 'Here is ' + dollars(c.cents) + ' of CountAble Premium credit. In the app, open ' + COUPON_WHERE + ' and enter ' + code + '. It works once' +
-      (c.ends_at ? ', until ' + day(new Date(c.ends_at)) : '') + '.' + (link ? ' Need the app first? ' + link : '');
+  // SHORT, WITH THE CODE ON A LINE OF ITS OWN (owner, Oct 14 2026: "the text
+  // for my friends is too long and it will be hard to copy and paste the
+  // code. make sure it simply but clearly references where you can input the
+  // codes"). The code is one six-letter word, easy to read and type. Where it
+  // goes: in setup, I HAVE A CODE on the plan options; afterwards, the box in
+  // DATA. His own note, if he wrote one, goes first. It is held with the open
+  // sheet only: never sent to the database, never stored, gone when the sheet
+  // closes.
+  function couponMessage(c, code, link, note) {
+    var lines = [], mine = text(note).trim();
+    if (mine) lines.push(mine, '');
+    lines.push('Here is ' + dollars(c.cents) + ' of CountAble Premium, on me!');
+    if (link) lines.push('Get the app: ' + link);
+    lines.push('Your code: ' + code + (c.ends_at ? ' (good until ' + day(new Date(c.ends_at)) + ')' : ''));
+    lines.push('In setup, pick Premium, then tap I HAVE A CODE. Already set up? ' + COUPON_WHERE + '.');
+    return lines.join('\n');
+  }
+  // The text as the open coupon sheet would send it: his note, and the
+  // install link unless he took it off.
+  function couponWords(top, c, code) {
+    var inv = S.people && S.people.invite, link = !top.nolink && inv && inv.link ? text(inv.link) : '';
+    return couponMessage(c, code, link, top.note);
   }
   // iOS wants `&body=` (the same shape the app's own invite uses).
   function smsLink(body) { return 'sms:&body=' + encodeURIComponent(body); }
@@ -656,7 +700,18 @@
       (open.length ? '<div class="list">' + open.map(couponRow).join('') + '</div>' : '<p class="fine center">No unused coupons.</p>') +
       '<button class="btn amber wide" data-act="cmake">Make a coupon</button>' +
       '<p class="fine center">' + esc(dollars(R.room_cents)) + ' of room left: at most ' + esc(dollars(R.unused_cap_cents)) + ' of unused coupons can be out at once.</p>' +
-      older + '</section>';
+      viewWords(R) + older + '</section>';
+  }
+  // TEN CODE WORDS AT A TIME (owner, Oct 15 2026: "just store 10 words codes
+  // at a time for now but give me a button on the dashboard for minting 10
+  // more"). How many are ready to go on coupons, never which: the words
+  // themselves stay in the database until a coupon carries one. MINT 10 MORE
+  // works once the ready ones are used.
+  function viewWords(R) {
+    if (R.words_ready == null) return '';
+    var ready = Number(R.words_ready) || 0, batch = Number(R.words_batch) || 10;
+    return '<p class="fine center">' + (ready ? esc(ready + ' of ' + batch + ' code words ready.') : esc('No code words ready. Mint ' + batch + ' more to make a coupon.')) + '</p>' +
+      '<button class="btn wide" data-act="cmint"' + (ready ? ' disabled' : '') + '>' + esc('Mint ' + batch + ' more') + '</button>';
   }
 
   /* ---------- the coach ---------- */
@@ -764,9 +819,15 @@
       return other.length ? s.name + ' also ran on ' + other.join(' and ') + '.' : '';
     }).filter(Boolean);
   }
+  // The page's tabs, two to a row. Costs and Marketing (Oct 14 2026) are the
+  // two documents, by the name each has in the database.
+  var TABS = [{ id: 'home', name: 'Dashboard' }, { id: 'coach', name: 'Coach' }, { id: 'cost', name: 'Costs' }, { id: 'marketing', name: 'Marketing' }];
+  var DOC_TABS = { cost: 'Costs', marketing: 'Marketing' };
+  var isDocTab = function (id) { return Object.prototype.hasOwnProperty.call(DOC_TABS, id); };
   function viewTabs() {
-    return '<div class="pair tabs"><button class="btn small' + (S.tab !== 'coach' ? ' on' : '') + '" data-act="tab" data-id="home">Dashboard</button>' +
-      '<button class="btn small' + (S.tab === 'coach' ? ' on' : '') + '" data-act="tab" data-id="coach">Coach</button></div>';
+    return '<div class="pair tabs">' + TABS.map(function (t) {
+      return '<button class="btn small' + (S.tab === t.id ? ' on' : '') + '" data-act="tab" data-id="' + t.id + '">' + t.name + '</button>';
+    }).join('') + '</div>';
   }
   function viewCoach() {
     var C = S.coach || {}, D = C.data, sh = C.sheet;
@@ -950,6 +1011,199 @@
     }).join('');
   }
 
+  /* ---------- the documents ---------- */
+  // THE COSTS AND MARKETING TABS (owner, Oct 14 2026). One read,
+  // owner_docs_read: the newest version of each document. Asked for when one
+  // of the two tabs is opened (and again with the list while one is showing),
+  // never before. The answer lives in S.docs only: never in the browser's
+  // storage, and forgotten at every sign-out. Nothing here writes.
+  var docsTurn = 0;
+  // Forgetting also makes any answer still in the air too late to be shown.
+  function forgetDocs() { docsTurn++; S.docs = null; }
+  function loadDocs() {
+    var mine = gen, turn = ++docsTurn;
+    S.docs = { loading: true, data: S.docs ? S.docs.data : null };
+    if (S.stage === 'list') drawPage();
+    rpc('owner_docs_read', {}).then(function (r) {
+      if (mine !== gen || turn !== docsTurn || !S.docs) return;
+      if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
+      if (SECOND(r)) { needSecond(); return; }
+      S.docs.loading = false;
+      if (r.ok && r.data && Array.isArray(r.data.docs)) { S.docs.data = r.data; S.docs.failed = ''; }
+      else S.docs.failed = r.status === 404 ? 'This is not switched on yet.' : r.status === 0 ? 'No answer came back. Tap Refresh.'
+        : NOT_OWNER(r) ? 'This account is not the owner.' : 'The documents could not be read just now.';
+      if (S.stage === 'list') drawPage();
+    });
+  }
+  function viewDoc(slug) {
+    var D = S.docs || {}, name = esc(DOC_TABS[slug]);
+    if (!D.data) return '<section class="card"><h2 class="card-title">' + name + '</h2><p class="fine center">' + esc(D.failed || 'Reading.') + '</p></section>';
+    var d = D.data.docs.filter(function (x) { return x && x.slug === slug; })[0];
+    if (!d) {
+      return '<section class="card"><h2 class="card-title">' + name + '</h2><p class="fine center">Not loaded yet.</p>' +
+        '<p class="fine center">It is loaded from the Mac, and shows here at the next Refresh.</p></section>';
+    }
+    return '<section class="card doc"><p class="micro muted center">' + esc('Loaded ' + when(d.created_at) + ' · version ' + text(d.version)) + '</p>' +
+      '<div class="md">' + md(d.body) + '</div>' +
+      (D.failed ? '<p class="msg-line warn" role="alert">' + esc(D.failed) + '</p>' : '') +
+      '<p class="fine center">Read only. A new version is loaded from the Mac.</p></section>';
+  }
+
+  // A SMALL MARKDOWN READER, for the two documents. The stored words are
+  // DATA, never markup: every piece of them goes through esc() before any
+  // tag is put round it, so nothing in a document can add an element, an
+  // attribute, a script or a style. A link is drawn only to an http(s)
+  // address, opens on its own (rel=noopener), and anything else in a link
+  // is shown as its words. What it reads: headings, paragraphs, bold,
+  // italics, `code`, links, lists (numbered, bulleted, ticked, nested),
+  // tables (in a box that scrolls sideways on a phone, so the page itself
+  // never does), quotes, rules, and fenced code (kept as written).
+  var MD_FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+  var MD_HEAD = /^\s{0,3}(#{1,6})[ \t]+(.*?)[ \t#]*$/;
+  var MD_RULE = /^\s{0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+  var MD_ITEM = /^(\s*)([-*+]|\d{1,9}[.)])[ \t]+(.*)$/;
+  var MD_QUOTE = /^\s{0,3}>[ ]?(.*)$/;
+  var MD_ROW = /^\s*\|.*\|\s*$/;
+  var MD_SEP = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+  var MD_DEPTH = 8;
+  var mdBlank = function (l) { return !/\S/.test(l); };
+  // A line that begins a block of its own, and so ends a paragraph.
+  var mdStarts = function (l) { return MD_FENCE.test(l) || MD_HEAD.test(l) || MD_RULE.test(l) || MD_ITEM.test(l) || MD_QUOTE.test(l) || MD_ROW.test(l); };
+  function md(source) { return mdBlocks(text(source).replace(/\u0000/g, '').replace(/\r\n?/g, '\n').split('\n'), 0); }
+  // Bold and italics, on words that are already escaped.
+  function mdEmph(s) {
+    return esc(s)
+      .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<b>$1</b>')
+      .replace(/(^|[^\w*])\*(?=\S)([^*]*?\S)\*(?![\w*])/g, '$1<i>$2</i>')
+      .replace(/(^|[^\w])_(?=[^\s_])([^_]*?[^\s_])_(?!\w)/g, '$1<i>$2</i>');
+  }
+  // Links: [words](https://…). The address is checked BEFORE it is escaped
+  // into the attribute, and only http and https are ever made a link.
+  function mdLinks(s) {
+    var out = '', last = 0, m, re = /\[([^\]]*)\]\(([^()\s]*)\)/g;
+    while ((m = re.exec(s))) {
+      out += mdEmph(s.slice(last, m.index));
+      out += /^https?:\/\/[^\s"'<>`\\\u0000]+$/i.test(m[2])
+        ? '<a href="' + esc(m[2]) + '" target="_blank" rel="noopener noreferrer">' + mdEmph(m[1] || m[2]) + '</a>'
+        : mdEmph(m[1] || m[2]);
+      last = re.lastIndex;
+    }
+    return out + mdEmph(s.slice(last));
+  }
+  // A line's words: `code` is set aside first (kept exactly, escaped) and
+  // stands in as a numbered mark, so bold can run across it; then links,
+  // bold and italics; then each mark is given back its code.
+  function mdInline(s) {
+    var codes = [];
+    var marked = text(s).replace(/\u0000/g, '').replace(/`([^`]+)`/g, function (all, c) {
+      codes.push('<code>' + esc(c) + '</code>');
+      return '\u0000' + (codes.length - 1) + '\u0000';
+    });
+    return mdLinks(marked).replace(/\u0000(\d+)\u0000/g, function (all, k) { return codes[Number(k)] || ''; });
+  }
+  // A table row's cells: split on | (not inside `code`, not an escaped \|).
+  function mdCells(line) {
+    var s = line.trim().replace(/^\|/, '').replace(/\|$/, ''), cells = [], cur = '', code = false;
+    for (var k = 0; k < s.length; k++) {
+      var c = s.charAt(k);
+      if (c === '\\' && s.charAt(k + 1) === '|') { cur += '|'; k++; continue; }
+      if (c === '`') code = !code;
+      if (c === '|' && !code) { cells.push(cur.trim()); cur = ''; continue; }
+      cur += c;
+    }
+    cells.push(cur.trim());
+    return cells;
+  }
+  function mdTable(head, rows) {
+    var w = head.length;
+    var fit = function (r) { var x = r.slice(0, w); while (x.length < w) x.push(''); return x; };
+    var cells = function (r, tag) { return fit(r).map(function (c) { return '<' + tag + '>' + mdInline(c) + '</' + tag + '>'; }).join(''); };
+    // Five columns or more cannot fit a phone: their columns are kept wide
+    // enough to read, and the box scrolls.
+    return '<div class="md-table' + (w >= 5 ? ' wide' : '') + '"><table><thead><tr>' + cells(head, 'th') + '</tr></thead><tbody>' +
+      rows.map(function (r) { return '<tr>' + cells(r, 'td') + '</tr>'; }).join('') + '</tbody></table></div>';
+  }
+  // A list, from line i: its items, each with the lines that belong to it
+  // (a wrapped line, a second paragraph, a list inside it). Answers the
+  // markup and the line after the list.
+  function mdList(lines, i, depth) {
+    var n = lines.length, first = MD_ITEM.exec(lines[i]), m;
+    var indent = first[1].length, ordered = /\d/.test(first[2]), start = ordered ? parseInt(first[2], 10) : 1;
+    var sibling = function (x) { return !!x && x[1].length <= indent + 1 && /\d/.test(x[2]) === ordered; };
+    var items = [], cur = null;
+    while (i < n) {
+      var line = lines[i];
+      m = MD_ITEM.exec(line);
+      if (sibling(m)) { cur = { lines: [m[3]], pad: m[1].length + m[2].length + 1 }; items.push(cur); i++; continue; }
+      if (m && m[1].length <= indent + 1) break;                     // a list of the other kind begins
+      if (mdBlank(line)) {
+        // A blank line: the list goes on only if what comes next is another
+        // item or is indented under this one.
+        var j = i; while (j < n && mdBlank(lines[j])) j++;
+        if (j < n && (sibling(MD_ITEM.exec(lines[j])) || lines[j].match(/^\s*/)[0].length >= cur.pad)) { while (i < j) { cur.lines.push(''); i++; } continue; }
+        break;
+      }
+      var lead = line.match(/^\s*/)[0].length;
+      if (lead > indent) { cur.lines.push(line.slice(Math.min(lead, cur.pad))); i++; continue; }
+      if (!mdStarts(line)) { cur.lines.push(line.trim()); i++; continue; }   // a wrapped line that was not indented
+      break;
+    }
+    var html = items.map(function (it) {
+      var ls = it.lines, tick = /^\[([ xX])\][ \t]+/.exec(ls[0]), box = '';
+      if (tick) { box = '<span class="md-box' + (tick[1] === ' ' ? '' : ' done') + '" aria-hidden="true"></span>'; ls = [ls[0].slice(tick[0].length)].concat(ls.slice(1)); }
+      var simple = ls.every(function (l, k) { return !mdBlank(l) && (k === 0 || !mdStarts(l)); });
+      var inner = simple || depth >= MD_DEPTH ? mdInline(ls.map(function (l) { return l.trim(); }).join(' ')) : mdBlocks(ls, depth + 1);
+      return '<li' + (tick ? ' class="md-task"' : '') + '>' + box + inner + '</li>';
+    }).join('');
+    return { html: ordered ? '<ol' + (start !== 1 ? ' start="' + start + '"' : '') + '>' + html + '</ol>' : '<ul>' + html + '</ul>', next: i };
+  }
+  function mdBlocks(lines, depth) {
+    var out = [], i = 0, n = lines.length, m;
+    while (i < n) {
+      var line = lines[i];
+      if (mdBlank(line)) { i++; continue; }
+      if ((m = MD_FENCE.exec(line))) {
+        var fence = m[1], code = [];
+        i++;
+        while (i < n && !(lines[i].trim().indexOf(fence) === 0 && /^\s*(`{3,}|~{3,})\s*$/.test(lines[i]))) { code.push(lines[i]); i++; }
+        i++;                                                         // the closing fence (or the end)
+        out.push('<pre class="md-pre">' + esc(code.join('\n')) + '</pre>');
+        continue;
+      }
+      if ((m = MD_HEAD.exec(line))) {
+        var lv = Math.min(m[1].length, 4);
+        out.push('<h' + (lv + 1) + ' class="md-h' + lv + '">' + mdInline(m[2]) + '</h' + (lv + 1) + '>');
+        i++; continue;
+      }
+      if (MD_RULE.test(line)) { out.push('<hr>'); i++; continue; }
+      if (MD_ROW.test(line) && i + 1 < n && MD_SEP.test(lines[i + 1])) {
+        var head = mdCells(line), rows = [];
+        i += 2;
+        while (i < n && MD_ROW.test(lines[i])) { rows.push(mdCells(lines[i])); i++; }
+        out.push(mdTable(head, rows));
+        continue;
+      }
+      if (MD_QUOTE.test(line)) {
+        var q = [];
+        while (i < n) {
+          if ((m = MD_QUOTE.exec(lines[i]))) { q.push(m[1]); i++; continue; }
+          // A blank line between two parts of one quote keeps them in one box.
+          var j = i; while (j < n && mdBlank(lines[j])) j++;
+          if (j > i && j < n && MD_QUOTE.test(lines[j])) { while (i < j) { q.push(''); i++; } continue; }
+          break;
+        }
+        out.push('<blockquote>' + (depth < MD_DEPTH ? mdBlocks(q, depth + 1) : '<p>' + mdInline(q.join(' ')) + '</p>') + '</blockquote>');
+        continue;
+      }
+      if (MD_ITEM.test(line)) { var list = mdList(lines, i, depth); out.push(list.html); i = list.next; continue; }
+      var para = [line.trim()];
+      i++;
+      while (i < n && !mdBlank(lines[i]) && !mdStarts(lines[i])) { para.push(lines[i].trim()); i++; }
+      out.push('<p>' + mdInline(para.join(' ')) + '</p>');
+    }
+    return out.join('');
+  }
+
   function viewList() {
     var L = S.list;
     var due = L.followups.filter(function (f) { return daysUntil(f.check_on) <= 0; }).length;
@@ -1034,6 +1288,7 @@
     if (top.kind === 'item' && $('#itext')) top.draft = { body: val('#itext'), section: val('#isec') || top.orig.section, detail: val('#idetail') };
     if (top.kind === 'follow' && $('#ft')) top.draft = { title: val('#ft'), waiting_on: val('#fwho'), check_on: val('#fdate'), note: val('#fnote') };
     if (top.kind === 'cmake' && $('#clabel')) { top.label = val('#clabel'); top.who = val('#cfor'); }
+    if (top.kind === 'coupon' && $('#cnote')) top.note = val('#cnote');
     return top;
   }
 
@@ -1151,7 +1406,22 @@
         '<button class="btn wide" data-act="texts" data-id="' + esc(q.id) + '">Read their texts</button>' +
         '<p class="fine center">Their texts with the coach. Each time you open them, it is recorded.</p>' +
         '<button class="btn wide" data-act="pcoach" data-id="' + esc(q.id) + '">' + (q.you ? 'Your coach' : 'Their coach') + '</button>' +
+        // PAUSE (owner, Oct 14 2026): never your own account.
+        (q.you ? '' : q.paused_at
+          ? '<button class="btn amber wide" data-act="ppause" data-id="' + esc(q.id) + '" data-on="">Bring them back</button>'
+          : '<button class="btn red wide" data-act="ppause" data-id="' + esc(q.id) + '" data-on="1">Pause their account</button>') +
         '<button class="btn wide" data-act="close">Close</button></div>' };
+    },
+    // Asked before a pause or a return: what it does, in plain words.
+    ppause: function (a) {
+      var P = S.people, q = P && P.people ? P.people.filter(function (x) { return x.id === a.id; })[0] : null;
+      if (!q || q.you) return null;
+      var nm = q.name || 'This person';
+      return a.on
+        ? { html: pop('Pause ' + nm + '?', 'They can’t sign in or use the app, and see a notice that their account is paused. The coach stops texting them, and they leave their teams’ group texts without anything being announced. Nothing is deleted: their counts, plans, teams and credit stay, and you can bring them back any time.',
+            '<div class="pair">' + cancel + '<button class="btn red" data-act="ppausego" data-id="' + esc(q.id) + '" data-on="1">Pause</button></div>') }
+        : { html: pop('Bring ' + nm + ' back?', 'They can sign in again, the coach can text them as before, and they rejoin their teams’ group texts quietly.',
+            '<div class="pair">' + cancel + '<button class="btn amber" data-act="ppausego" data-id="' + esc(q.id) + '" data-on="">Bring back</button></div>') };
     },
     // One person's texts with the coach, oldest first. Read only.
     texts: function (a) {
@@ -1351,7 +1621,7 @@
       if (!c) return null;
       var kv = function (k, v) { return '<div class="kv"><span>' + esc(k) + '</span><b>' + esc(v) + '</b></div>'; };
       var show = S.cshow && S.cshow.id === c.id ? S.cshow : null, code = show && show.data ? text(show.data.code) : '';
-      var inv = S.people && S.people.invite, link = a.link && inv && inv.link ? text(inv.link) : '';
+      var inv = S.people && S.people.invite;
       var facts = kv('For', couponWho(c)) + kv('Made', day(new Date(c.made_at)) + (c.by_hand ? ', by hand' : ''));
       if (c.state === 'unused') facts += kv('Sent', c.sent_at ? day(new Date(c.sent_at)) : c.by_hand ? 'Not known' : 'Not yet') + (c.ends_at ? kv('Ends if unused', day(new Date(c.ends_at))) : '');
       if (c.state === 'used') {
@@ -1366,11 +1636,12 @@
         if (!show || show.loading) body = '<p class="fine center">Reading the code.</p>';
         else if (show.failed || !code) body = '<p class="fine center">' + esc(show.failed || 'This coupon can no longer be used.') + '</p><button class="btn wide" data-act="cagain" data-id="' + esc(c.id) + '">Try again</button>';
         else {
-          var msg = couponMessage(c, code, link);
+          var msg = couponWords(a, c, code);
           body = '<div class="box"><span class="micro">The code</span><p class="code">' + esc(code) + '</p></div>' +
-            '<div class="box"><span class="micro">The text</span><p class="pre">' + esc(msg) + '</p>' +
-              (inv && inv.link ? '<button class="btn small' + (a.link ? ' on' : '') + '" data-act="clink">' + (a.link ? 'Install link added' : 'Add the install link') + '</button>' : '') + '</div>' +
-            '<a class="btn amber wide" data-act="ctext" data-id="' + esc(c.id) + '" href="' + esc(smsLink(msg)) + '">Text it</a>' +
+            '<label class="field" for="cnote"><span class="micro muted">Your note, at the top (optional)</span><textarea class="well" id="cnote" maxlength="300" placeholder="Hey, try this. I use it every day.">' + esc(a.note || '') + '</textarea></label>' +
+            '<div class="box"><span class="micro">The text</span><p class="pre" id="cmsg">' + esc(msg) + '</p>' +
+              (inv && inv.link ? '<button class="btn small' + (a.nolink ? '' : ' on') + '" data-act="clink">' + (a.nolink ? 'Add the install link' : 'Install link added') + '</button>' : '') + '</div>' +
+            '<a class="btn amber wide" id="ctextlink" data-act="ctext" data-id="' + esc(c.id) + '" href="' + esc(smsLink(msg)) + '">Text it</a>' +
             '<div class="pair"><button class="btn" data-act="ccopy" data-id="' + esc(c.id) + '">Copy the text</button><button class="btn" data-act="ccode" data-id="' + esc(c.id) + '">Copy the code</button></div>' +
             '<p class="fine center">Text it opens your own Messages with this text filled in. You pick the person. This page never sees anyone’s number.</p>' +
             '<button class="btn wide" data-act="csent" data-id="' + esc(c.id) + '" data-on="' + (c.sent_at ? '1' : '') + '">' + (c.sent_at ? 'Mark as not sent' : 'Mark as sent') + '</button>' +
@@ -1467,7 +1738,7 @@
     else if (S.stage === 'offline') v.innerHTML = '<section class="card"><h1 class="card-title">No connection</h1><p class="fine center">The list could not be reached. Nothing is lost: it is kept in the database.</p><button class="btn wide" data-act="reload">Try again</button></section>';
     else if (S.stage === 'notowner') v.innerHTML = '<section class="card"><h1 class="card-title">Not the owner</h1><p class="fine center">This page opens only for the owner of CountAble. The account you signed in with is not it.</p><button class="btn wide" data-act="signoutgo">Sign out</button></section>';
     else if (S.stage === 'second') v.innerHTML = viewSecond();
-    else if (S.stage === 'list' && S.list) v.innerHTML = viewTabs() + (S.tab === 'coach' ? viewCoach() : viewList());
+    else if (S.stage === 'list' && S.list) v.innerHTML = viewTabs() + (S.tab === 'coach' ? viewCoach() : isDocTab(S.tab) ? viewDoc(S.tab) : viewList());
     else v.innerHTML = viewSignIn();
   }
 
@@ -1486,6 +1757,8 @@
         loadPeople();
         // The Coach tab is read again with the list while it is the one showing.
         if (S.tab === 'coach' && !(S.coach && S.coach.loading)) loadCoach();
+        // So are the documents, while one of them is the tab showing.
+        if (isDocTab(S.tab) && !(S.docs && S.docs.loading)) loadDocs();
         // Typing that was kept across a sign-out comes back.
         if (S.pending) { var kept = S.pending; S.pending = null; stack.length = 0; stack.push(kept); drawSheet(); }
       } else if (r.status === 401) {
@@ -1656,7 +1929,7 @@
     signoutgo: function (d) {
       var token = session && session.access_token, everywhere = !!(d && d.all);
       gen++;                                   // every call still in the air is now too late to matter
-      keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); S.tab = 'home'; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
+      keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); S.tab = 'home'; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
       stack.length = 0; drawSheet(); drawPage();
       if (!token) return;
       // First the database forgets that this sign-in passed (or, for every
@@ -1734,6 +2007,14 @@
 
     // A person, and the link to hand a friend.
     person: function (d) { openSheet('person', { id: d.id }); },
+    ppast: function () { S.showPaused = !S.showPaused; drawPage(); },
+    ppause: function (d) { if (d.id) openSheet('ppause', { id: d.id, on: d.on === '1' }); },
+    // The state is sent, not a toggle, so a second tap changes nothing.
+    ppausego: function (d, el) {
+      if (!d.id) return;
+      var on = d.on === '1';
+      change(el, 'owner_person_pause', { _user: d.id, _pause: on }, on ? 'Paused' : 'Brought back', closeAll);
+    },
     // Their texts with the coach: asked for here, by this tap, and nowhere else.
     texts: function (d) { if (!d.id) return; stack.push({ kind: 'texts', id: d.id }); loadTexts(d.id, TEXTS_FIRST); },
     textsmore: function (d) { if (S.texts && S.texts.id === d.id && !S.texts.loading) loadTexts(d.id, TEXTS_MORE); },
@@ -1749,7 +2030,33 @@
     // Coupons: made here, sent from his own Messages, used by a tester in the app.
     cpast: function () { S.showCoupons = !S.showCoupons; drawPage(); },
     // (draft: true keeps the keyboard down until he taps the name box; the name is optional.)
-    cmake: function () { if (S.coupons && S.coupons.rules) openSheet('cmake', { cents: null, who: '', label: '', made: newId(), draft: true }); },
+    cmake: function () {
+      var C = S.coupons;
+      if (!C || !C.rules) return;
+      if (C.rules.words_ready != null && !Number(C.rules.words_ready)) { toast('No code words are ready. Tap Mint ' + (Number(C.rules.words_batch) || 10) + ' more first.'); return; }
+      openSheet('cmake', { cents: null, who: '', label: '', made: newId(), draft: true });
+    },
+    // MINT 10 MORE. Its id is kept until an answer says it worked, so a second
+    // tap after a lost answer is the SAME ten and they are readied once.
+    cmint: function (d, el) {
+      var C = S.coupons;
+      if (!C || !C.rules || S.busy) return;
+      if (Number(C.rules.words_ready) > 0) { toast(Number(C.rules.words_ready) + ' code words are still ready.'); return; }
+      if (!S.mintId) S.mintId = newId();
+      var release = hold(el), mine = gen;
+      rpc('owner_code_mint', { _id: S.mintId }).then(function (r) {
+        if (mine !== gen) { S.busy = false; return; }
+        if (r.ok && r.data) {
+          S.busy = false; S.mintId = null;
+          toast((Number(r.data.ready) || 0) + ' code words ready'); loadCoupons();
+          return;
+        }
+        if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
+        if (SECOND(r)) { needSecond(); return; }
+        release(); toast(couponWhy(r));
+        if (r.status === 0) loadCoupons();     // it may have landed: show what is true
+      });
+    },
     camount: function (d) {
       var top = capture();
       if (!top || top.kind !== 'cmake') return;
@@ -1787,7 +2094,8 @@
       if (c.state === 'unused') loadCouponCode(c.id); else drawSheet();
     },
     cagain: function (d) { if (d.id && !(S.cshow && S.cshow.loading)) loadCouponCode(d.id); },
-    clink: function () { var top = stack.length ? stack[stack.length - 1] : null; if (top && top.kind === 'coupon') { top.link = !top.link; drawSheet(); } },
+    // The install link is in the text unless he takes it off (for a friend who already has the app).
+    clink: function () { var top = capture(); if (top && top.kind === 'coupon') { top.nolink = !top.nolink; drawSheet(); } },
     // "Text it" is a link: the tap itself opens his Messages. This only notes that it was sent.
     ctext: function (d) { ACT.csentquiet(d); },
     csentquiet: function (d) {
@@ -1798,11 +2106,10 @@
     ccopy: function (d) { ACT.ccopyof(d, true); },
     ccode: function (d) { ACT.ccopyof(d, false); },
     ccopyof: function (d, whole) {
-      var top = stack.length ? stack[stack.length - 1] : null, c = top && top.kind === 'coupon' ? couponOf(top.id) || top.fresh : null;
+      var top = capture(), c = top && top.kind === 'coupon' ? couponOf(top.id) || top.fresh : null;
       var code = S.cshow && c && S.cshow.id === c.id && S.cshow.data ? text(S.cshow.data.code) : '';
       if (!c || !code) return;
-      var inv = S.people && S.people.invite;
-      var words = whole ? couponMessage(c, code, top.link && inv && inv.link ? text(inv.link) : '') : code;
+      var words = whole ? couponWords(top, c, code) : code;
       var byHand = function () { openSheet('ccopied', { words: words }); };
       try {
         navigator.clipboard.writeText(words).then(function () {
@@ -1818,10 +2125,13 @@
     ccancel: function (d) { if (couponOf(d.id)) openSheet('ccancel', { id: d.id }); },
     ccancelgo: function (d, el) { change(el, 'owner_coupon_cancel', { _id: d.id }, 'Coupon cancelled', closeAll); },
 
-    // The Coach tab. Its two reads are asked for here, when it is opened.
+    // The tabs. The Coach tab's two reads, and the documents' one, are asked
+    // for here, when the tab is opened.
     tab: function (d) {
-      S.tab = d.id === 'coach' ? 'coach' : 'home';
-      if (S.tab === 'coach' && !(S.coach && (S.coach.data || S.coach.loading))) loadCoach(); else drawPage();
+      S.tab = d.id === 'coach' || isDocTab(d.id) ? d.id : 'home';
+      if (S.tab === 'coach' && !(S.coach && (S.coach.data || S.coach.loading))) loadCoach();
+      else if (isDocTab(S.tab) && !(S.docs && (S.docs.data || S.docs.loading))) loadDocs();
+      else drawPage();
     },
     coachdays: function (d) { var n = Number(d.id); if (COACH_DAYS.indexOf(n) < 0 || n === S.coachDays) return; S.coachDays = n; loadCoach(); },
     coachwho: function (d) { if (!d.id) return; S.coachWho = d.id; loadCoach(); },
@@ -1895,6 +2205,19 @@
     if (el) { if (el.disabled) return; var fn = ACT[el.dataset.act]; if (fn) fn(el.dataset, el); return; }
     // A tap on the dimmed page closes a question, never a sheet with typing in it.
     if (e.target.hasAttribute && e.target.hasAttribute('data-veil') && !e.target.querySelector('input,textarea,select')) closeSheet();
+  });
+  // His note on a coupon: the text and the link to Messages follow each key,
+  // in place, so the box keeps the keyboard. The note lives in the open
+  // sheet's entry and nowhere else.
+  document.addEventListener('input', function (e) {
+    var top = stack.length ? stack[stack.length - 1] : null;
+    if (!e.target || e.target.id !== 'cnote' || !top || top.kind !== 'coupon') return;
+    var c = couponOf(top.id) || top.fresh, code = S.cshow && c && S.cshow.id === c.id && S.cshow.data ? text(S.cshow.data.code) : '';
+    if (!c || !code) return;
+    top.note = String(e.target.value || '');
+    var msg = couponWords(top, c, code), shown = $('#cmsg'), link = $('#ctextlink');
+    if (shown) shown.textContent = msg;
+    if (link) link.setAttribute('href', smsLink(msg));
   });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && e.target && e.target.id === 'phone') { e.preventDefault(); ACT.start(); }
