@@ -397,7 +397,8 @@
     delivery: 'Texts are not reaching phones',
     report: 'The twice-daily report is not landing',
     coaching_credit: 'Your coaching credit is low',
-    spend_tripwire: 'Today\u2019s AI spend passed your tripwire'
+    spend_tripwire: 'Today\u2019s AI spend passed your tripwire',
+    inbound_flood: 'Texts flooded in to the coach\u2019s number'
   };
   // His own coaching credit is told at three marks, and the alarm carries
   // which one (owner, Oct 13 2026: "yes add the warning"; owner_alerts.ts).
