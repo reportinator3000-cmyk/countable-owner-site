@@ -85,6 +85,20 @@
 // Markdown reader below, which treats the stored words as data: every
 // character is escaped before any tag is put round it.
 //
+// REPORTS FROM THE TEAM CHATS, AND THE MODERATOR'S HIDE (owner, Oct 17 2026:
+// "move forward with the moderator hide"; he picked this page for it). A
+// message someone reported in a team chat is listed here (owner_chat_reports_read:
+// when, why, which team, who reported and who or what was reported, and
+// whether the message is still showing; never a word of it). Its words are
+// read ONE REPORT AT A TIME and only on a tap (owner_chat_report_open), the
+// database records every opening, and the words are held in memory only:
+// never in this browser's storage, and gone when the sheet closes or the
+// sign-in ends. HIDE FOR EVERYONE takes the message off every phone in that
+// team (the open chats drop it within seconds, with no new build), BRING BACK
+// puts it back, and KEEP IT marks the report reviewed and leaves the message
+// as it is (owner_chat_message_hide, owner_chat_report_keep). A message the
+// safety screen held back is never hidden or brought back from here.
+//
 // TWO HANDS, ONE ROW. A session on the Mac can change an item while it is open
 // here. A save says when this page last saw the row; if the row has changed,
 // the database refuses, the page reads the row again, keeps what was typed
@@ -370,13 +384,13 @@
   // in an open sheet is kept by whoever called this (S.pending).
   function needSecond() {
     var first = S.stage !== 'second';
-    S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); S.stage = 'second'; S.busy = false;
+    S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); S.stage = 'second'; S.busy = false;
     stack.length = 0; drawSheet();
     if (first) { S.codeSent = false; say(''); drawPage(); secondStart(); } else drawPage();
   }
   // The session is over. Anything being typed is kept and comes back after signing in.
   function signedOut(text) {
-    keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); S.stage = 'signin'; S.busy = false;
+    keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); S.stage = 'signin'; S.busy = false;
     say(text || 'You are signed out. Sign in again.', 'warn');
     stack.length = 0; drawSheet(); drawPage();
   }
@@ -713,6 +727,99 @@
     var ready = Number(R.words_ready) || 0, batch = Number(R.words_batch) || 10;
     return '<p class="fine center">' + (ready ? esc(ready + ' of ' + batch + ' code words ready.') : esc('No code words ready. Mint ' + batch + ' more to make a coupon.')) + '</p>' +
       '<button class="btn wide" data-act="cmint"' + (ready ? ' disabled' : '') + '>' + esc('Mint ' + batch + ' more') + '</button>';
+  }
+
+  /* ---------- reports from the team chats ---------- */
+  // REPORTS (owner, Oct 17 2026: "move forward with the moderator hide").
+  //   owner_chat_reports_read   the reports, WITHOUT a word of any message.
+  //                             Read after the list, and never in its way.
+  //   owner_chat_report_open    the words of one, asked for by a tap. The
+  //                             database records each opening. The answer
+  //                             lives in S.rshow only, and is forgotten when
+  //                             the sheet closes or the sign-in ends.
+  //   owner_chat_message_hide   HIDE FOR EVERYONE, or BRING BACK: the state is
+  //                             sent, so a second tap changes nothing.
+  //   owner_chat_report_keep    KEEP IT: reviewed, and the message stays.
+  // The reasons in the app's own words (REPORT_REASONS in the app's
+  // team-chat-merge.ts).
+  var REPORT_REASONS = { harassment: 'Harassment', hateful: 'Hateful', sexual: 'Sexual', spam: 'Spam', self_harm: 'Self-harm', other: 'Something else' };
+  // What became of the message: a word for its row, a line for its sheet.
+  var REPORT_CHIPS = { shown: 'Showing', hidden: 'Hidden', hidden_safety: 'Held back', deleted: 'Deleted', gone: 'Gone' };
+  var REPORT_STATES = {
+    shown: 'On the team’s phones',
+    hidden: 'Hidden for everyone',
+    hidden_safety: 'Held back by the safety screen',
+    deleted: 'Deleted by its writer',
+    gone: 'No longer in the chat'
+  };
+  var REPORT_NOTES = {
+    hidden: 'You hid it: nobody in the team sees it, its writer included. Bring it back and it shows in the chat again the next time each person opens it.',
+    hidden_safety: 'The safety screen held it back when it was sent. Nobody in the team sees it, and it stays that way: it cannot be hidden or brought back from here.',
+    deleted: 'Its writer deleted it, so nobody in the team sees it.',
+    gone: 'It is no longer in the chat: chats keep 90 days, and a deleted team takes its chat with it.'
+  };
+  var reasonWord = function (k) { return REPORT_REASONS[k] || text(k).replace(/_/g, ' '); };
+  var reportsTurn = 0, rshowTurn = 0;
+  // Memory only, never stored: the reports (no words), ONE report's words
+  // while its sheet is open, and whether the reviewed ones are unfolded.
+  S.reports = null; S.rshow = null; S.showReviewed = false;
+  // Forgetting also makes any answer still in the air too late to be shown.
+  function forgetReport() { rshowTurn++; S.rshow = null; }
+  function forgetReports() { reportsTurn++; S.reports = null; forgetReport(); }
+  function loadReports() {
+    var mine = gen, turn = ++reportsTurn;
+    rpc('owner_chat_reports_read', {}).then(function (r) {
+      if (mine !== gen || turn !== reportsTurn) return;     // signed out, or a newer read is in the air
+      if (r.ok && r.data && Array.isArray(r.data.reports)) S.reports = r.data;
+      else if (!S.reports) S.reports = { failed: true, missing: r.ok || r.status === 404 };
+      if (S.stage === 'list') drawPage();
+      // An open report is drawn again from what is now true.
+      if (stack.length && stack[stack.length - 1].kind === 'report') drawSheet();
+    });
+  }
+  function reportWhy(r) {
+    if (r.status === 0) return 'No answer came back. Try again.';
+    if (NOT_OWNER(r)) return 'This account is not the owner.';
+    if (r.data && r.data.code === '22023' && r.data.message) return String(r.data.message);
+    return 'The report could not be read. Try again in a moment.';
+  }
+  // ONE REPORT'S WORDS, asked for by a tap and never before.
+  function loadReportWords(id) {
+    var mine = gen, turn = ++rshowTurn;
+    S.rshow = { id: id, loading: true };
+    drawSheet();
+    rpc('owner_chat_report_open', { _report: id }).then(function (r) {
+      // Too late: the sheet was closed, the sign-in ended, or a newer read is in the air.
+      if (mine !== gen || turn !== rshowTurn) return;
+      if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
+      if (SECOND(r)) { needSecond(); return; }
+      if (r.ok && r.data && r.data.id === id) S.rshow = { id: id, data: r.data };
+      else S.rshow = { id: id, failed: reportWhy(r) };
+      drawSheet();
+    });
+  }
+  function reportOf(id) { var R = S.reports; return R && R.reports ? R.reports.filter(function (x) { return x.id === id; })[0] || null : null; }
+  function reportRow(x) {
+    return '<button class="row" data-act="report" data-id="' + esc(x.id) + '"><span class="grow"><b>' + esc(reasonWord(x.reason)) + ' · ' + esc(x.about) + '</b>' +
+      '<small>' + esc(text(x.team) + ' · reported by ' + text(x.by) + ' · ' + when(x.at)) + '</small></span>' +
+      '<span class="chip' + (x.state === 'hidden' ? ' on' : x.state === 'shown' && !x.reviewed_at ? ' warn' : '') + '">' + esc(REPORT_CHIPS[x.state] || text(x.state)) + '</span><i class="chev"></i></button>';
+  }
+  function viewReports() {
+    var R = S.reports;
+    if (!R || R.missing) return '';
+    if (R.failed) return '<section class="card"><h2 class="card-title">Reports</h2><p class="fine center">The reports could not be read just now. Nothing else is affected.</p></section>';
+    var open = R.reports.filter(function (x) { return !x.reviewed_at; });
+    var done = R.reports.filter(function (x) { return x.reviewed_at; });
+    var older = '';
+    if (done.length) {
+      older = '<button class="link" data-act="rpast">' + (S.showReviewed ? 'Hide reviewed' : 'Reviewed · ' + done.length) + '</button>';
+      if (S.showReviewed) older += '<div class="list">' + done.map(reportRow).join('') + '</div>';
+    }
+    return '<section class="card' + (open.length ? ' verdict' : '') + '"><h2 class="card-title">Reports' + (open.length ? ' · ' + open.length + ' open' : '') + '</h2>' +
+      (open.length
+        ? '<p class="stat">' + (open.length === 1 ? '1 report to look at' : open.length + ' reports to look at') + '</p><div class="list">' + open.map(reportRow).join('') + '</div>'
+        : '<p class="stat calm">Nothing reported</p>') +
+      '<p class="fine center">Messages someone reported in a team chat. Open one to read it, then hide it for everyone or keep it. Each opening is recorded.</p>' + older + '</section>';
   }
 
   /* ---------- the coach ---------- */
@@ -1242,7 +1349,7 @@
       }).join('') + '</div>';
     }
     return '' +
-      viewToday() + viewMoney() + viewPeople() + viewInvite() + viewCoupons() +
+      viewToday() + viewReports() + viewMoney() + viewPeople() + viewInvite() + viewCoupons() +
       '<h1 class="day">The list <span>' + L.items.length + ' open · ' + L.followups.length + ' to chase' + (due ? ' · ' + due + ' due' : '') + '</span></h1>' +
       '<section class="card' + (due ? ' verdict' : '') + '"><h2 class="card-title">Follow-ups · ' + L.followups.length + '</h2>' +
         '<p class="fine center">Things to chase on a day. On that day it turns red here.</p>' +
@@ -1669,6 +1776,47 @@
         '<label class="field" for="cwords"><textarea class="well" id="cwords" readonly>' + esc(a.words) + '</textarea></label>' +
         '<button class="btn" data-act="close">Close</button>') };
     },
+    // ONE REPORT from a team chat. Its words are asked for when this opens,
+    // and shown here only. What can be done waits for them: he reads first.
+    report: function (a) {
+      var q = reportOf(a.id), show = S.rshow && S.rshow.id === a.id ? S.rshow : null, D = show && show.data ? show.data : null;
+      if (!q && !D) return null;
+      var st = (D && D.state) || (q && q.state) || 'gone';
+      var reviewed = (D && D.reviewed_at) || (q && q.reviewed_at) || null;
+      var at = (D && D.at) || (q && q.at);
+      var kv = function (k, v) { return v === '' || v === null || v === undefined ? '' : '<div class="kv"><span>' + esc(k) + '</span><b>' + esc(v) + '</b></div>'; };
+      var facts = (q ? kv('Team', q.team) + kv('Reported by', q.by) + kv('About', q.about) : '') +
+        kv('Reported', at ? when(at) : '') + (q && q.written_at ? kv('Written', when(q.written_at)) : '') +
+        kv('Now', REPORT_STATES[st] || text(st)) + kv('Reviewed', reviewed ? day(new Date(reviewed)) : 'Not yet');
+      var body;
+      if (!show || show.loading) body = '<p class="fine center">Reading.</p>';
+      else if (show.failed) body = '<p class="msg-line warn" role="alert">' + esc(show.failed) + '</p><button class="btn wide" data-act="ragain" data-id="' + esc(a.id) + '">Try again</button>';
+      else {
+        body = (D.has_words && D.words != null
+          ? '<div class="box"><span class="micro">What was said</span><p class="pre">' + esc(D.words) + '</p></div>'
+          : '<p class="fine center">The words are no longer kept: a report keeps them for 90 days after it is reviewed.</p>') +
+          (REPORT_NOTES[st] ? '<p class="fine center">' + esc(REPORT_NOTES[st]) + '</p>' : '') +
+          (st === 'shown' ? '<button class="btn red wide" data-act="rhide" data-id="' + esc(a.id) + '" data-on="1">Hide for everyone</button>' : '') +
+          (st === 'hidden' ? '<button class="btn amber wide" data-act="rhide" data-id="' + esc(a.id) + '" data-on="">Bring back</button>' : '') +
+          (reviewed ? '' : '<button class="btn wide" data-act="rkeep" data-id="' + esc(a.id) + '">Keep it</button>' +
+            '<p class="fine center">Keep it marks the report reviewed and leaves the message where it is.</p>');
+      }
+      return { full: true, html: '<div class="sheet swap" role="dialog" aria-modal="true" aria-label="Report">' +
+        '<h2 class="name">' + esc(reasonWord((D && D.reason) || (q && q.reason))) + '</h2>' +
+        '<div class="chips"><span class="chip' + (st === 'hidden' ? ' on' : '') + '">' + esc(REPORT_CHIPS[st] || text(st)) + '</span>' + (reviewed ? '<span class="chip">Reviewed</span>' : '<span class="chip warn">Open</span>') + '</div>' +
+        '<div class="list">' + facts + '</div>' + body +
+        '<p class="fine center">This opening is on the record. The words are not kept on this device.</p>' +
+        '<button class="btn wide" data-act="close">Close</button></div>' };
+    },
+    // Asked before a hide or a return: what it does, in plain words.
+    rhide: function (a) {
+      if (!(S.rshow && S.rshow.id === a.id && S.rshow.data)) return null;
+      return a.on
+        ? { html: pop('Hide it for everyone?', 'It leaves every phone in that team within seconds, its writer’s too, and the coach stops reading it. Nothing is deleted: you can bring it back. Every open report on it is marked reviewed.',
+            '<div class="pair">' + cancel + '<button class="btn red" data-act="rhidego" data-id="' + esc(a.id) + '" data-on="1">Hide for everyone</button></div>') }
+        : { html: pop('Bring it back?', 'It shows in that team’s chat again, where it was, the next time each person opens the chat.',
+            '<div class="pair">' + cancel + '<button class="btn amber" data-act="rhidego" data-id="' + esc(a.id) + '" data-on="">Bring back</button></div>') };
+    },
     invitelink: function () {
       var inv = S.people && S.people.invite;
       if (!inv || !inv.link) return null;
@@ -1694,6 +1842,8 @@
     if (S.trace && !stack.some(function (e) { return e.kind === 'trace'; })) forgetTrace();
     if (S.cshow && !stack.some(function (e) { return e.kind === 'coupon' || e.kind === 'ccancel' || e.kind === 'ccopied'; })) forgetCoupon();
     if (S.coupons && !(S.people && S.list)) forgetCoupons();
+    // A report's words are forgotten the moment its sheet is closed, whichever way.
+    if (S.rshow && !stack.some(function (e) { return e.kind === 'report' || e.kind === 'rhide'; })) forgetReport();
     var top = stack.length ? stack[stack.length - 1] : null;
     var s = top && S.list ? SHEETS[top.kind](top) : null;
     if (top && !s) { stack.length = 0; top = null; }
@@ -1756,6 +1906,8 @@
       if (r.ok && r.data && r.data.sections) {
         S.list = r.data; S.asOf = new Date(); S.stage = 'list';
         loadPeople();
+        // The reports from the team chats, beside the people and never in the list's way.
+        loadReports();
         // The Coach tab is read again with the list while it is the one showing.
         if (S.tab === 'coach' && !(S.coach && S.coach.loading)) loadCoach();
         // So are the documents, while one of them is the tab showing.
@@ -1930,7 +2082,7 @@
     signoutgo: function (d) {
       var token = session && session.access_token, everywhere = !!(d && d.all);
       gen++;                                   // every call still in the air is now too late to matter
-      keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); S.tab = 'home'; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
+      keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); S.tab = 'home'; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
       stack.length = 0; drawSheet(); drawPage();
       if (!token) return;
       // First the database forgets that this sign-in passed (or, for every
@@ -2125,6 +2277,19 @@
     },
     ccancel: function (d) { if (couponOf(d.id)) openSheet('ccancel', { id: d.id }); },
     ccancelgo: function (d, el) { change(el, 'owner_coupon_cancel', { _id: d.id }, 'Coupon cancelled', closeAll); },
+
+    // Reports from the team chats. The words of one: asked for here, by this tap, and nowhere else.
+    report: function (d) { if (!d.id) return; stack.push({ kind: 'report', id: d.id }); loadReportWords(d.id); },
+    ragain: function (d) { if (d.id && !(S.rshow && S.rshow.loading)) loadReportWords(d.id); },
+    rpast: function () { S.showReviewed = !S.showReviewed; drawPage(); },
+    rhide: function (d) { if (d.id) openSheet('rhide', { id: d.id, on: d.on === '1' }); },
+    // The state is sent, not a toggle, so a second tap changes nothing.
+    rhidego: function (d, el) {
+      if (!d.id) return;
+      var on = d.on === '1';
+      change(el, 'owner_chat_message_hide', { _report: d.id, _hide: on }, on ? 'Hidden for everyone' : 'Brought back', closeAll);
+    },
+    rkeep: function (d, el) { if (d.id) change(el, 'owner_chat_report_keep', { _report: d.id }, 'Kept, and marked reviewed', closeAll); },
 
     // The tabs. The Coach tab's two reads, and the documents' one, are asked
     // for here, when the tab is opened.
