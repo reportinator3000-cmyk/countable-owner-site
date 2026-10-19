@@ -99,6 +99,17 @@
 // as it is (owner_chat_message_hide, owner_chat_report_keep). A message the
 // safety screen held back is never hidden or brought back from here.
 //
+// THE BUILDS TAB (owner, Oct 18 2026: "every time a testflight is launched, I
+// get a list of every new feature to test on my dashboard"). For every
+// TestFlight build, one plain sentence per thing that is new since the build
+// before it, newest build first (owner_builds_read). The sentences are
+// written on the Mac when the build is made (./testflight-build) and are
+// never in this file. Here he marks each line TRIED or NOT RIGHT
+// (owner_build_mark, behind the same guard); NOT RIGHT also opens a new item
+// for his list with the sentence filled in, so he can say what is wrong. A
+// mark is his own record: it is never an instruction to a session. Read when
+// the tab is opened, held in memory only, forgotten at every sign-out.
+//
 // TWO HANDS, ONE ROW. A session on the Mac can change an item while it is open
 // here. A save says when this page last saw the row; if the row has changed,
 // the database refuses, the page reads the row again, keeps what was typed
@@ -290,9 +301,11 @@
     codeSent: false,           // a code was emailed for this sign-in: show the box to type it in
     people: null,              // the people and the invite link, read after the list (null = not read yet)
     texts: null,               // ONE person's texts while their sheet is open; memory only, never stored
-    tab: 'home',               // home | coach | cost | marketing; memory only
+    tab: 'home',               // home | coach | cost | marketing | builds; memory only
     coach: null,               // what ran and the sheet, read when the Coach tab is opened
     docs: null,                // the two documents, read when the Costs or Marketing tab is opened; memory only, never stored
+    builds: null,              // what is new in each build, read when the Builds tab is opened; memory only, never stored
+    bopen: {},                 // which builds are folded open (the newest is, until he folds it)
     coachDays: 7, coachWho: null, coachIdle: false, coachAll: false,
     pcoach: null,              // ONE person's coach while their sheet is open; memory only, never stored
     trace: null                // ONE write's record while its sheet is open; memory only, never stored
@@ -384,13 +397,13 @@
   // in an open sheet is kept by whoever called this (S.pending).
   function needSecond() {
     var first = S.stage !== 'second';
-    S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); S.stage = 'second'; S.busy = false;
+    S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); forgetBuilds(); S.stage = 'second'; S.busy = false;
     stack.length = 0; drawSheet();
     if (first) { S.codeSent = false; say(''); drawPage(); secondStart(); } else drawPage();
   }
   // The session is over. Anything being typed is kept and comes back after signing in.
   function signedOut(text) {
-    keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); S.stage = 'signin'; S.busy = false;
+    keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); forgetBuilds(); S.stage = 'signin'; S.busy = false;
     say(text || 'You are signed out. Sign in again.', 'warn');
     stack.length = 0; drawSheet(); drawPage();
   }
@@ -928,8 +941,9 @@
     }).filter(Boolean);
   }
   // The page's tabs, two to a row. Costs and Marketing (Oct 14 2026) are the
-  // two documents, by the name each has in the database.
-  var TABS = [{ id: 'home', name: 'Dashboard' }, { id: 'coach', name: 'Coach' }, { id: 'cost', name: 'Costs' }, { id: 'marketing', name: 'Marketing' }];
+  // two documents, by the name each has in the database. Builds (Oct 18 2026)
+  // is what is new in each TestFlight build; alone on its row, it spans it.
+  var TABS = [{ id: 'home', name: 'Dashboard' }, { id: 'coach', name: 'Coach' }, { id: 'cost', name: 'Costs' }, { id: 'marketing', name: 'Marketing' }, { id: 'builds', name: 'Builds' }];
   var DOC_TABS = { cost: 'Costs', marketing: 'Marketing' };
   var isDocTab = function (id) { return Object.prototype.hasOwnProperty.call(DOC_TABS, id); };
   function viewTabs() {
@@ -1155,6 +1169,70 @@
       '<div class="md">' + md(d.body) + '</div>' +
       (D.failed ? '<p class="msg-line warn" role="alert">' + esc(D.failed) + '</p>' : '') +
       '<p class="fine center">Read only. A new version is loaded from the Mac.</p></section>';
+  }
+
+  /* ---------- the builds ---------- */
+  // THE BUILDS TAB (Oct 18 2026). One read, owner_builds_read: the last
+  // twenty builds, newest first, each with its sentences and his marks.
+  // Asked for when the tab is opened (and again with the list while it is
+  // showing, which is how a mark comes back), never before. Held in S.builds
+  // only, and forgotten at every sign-out.
+  var buildsTurn = 0;
+  function forgetBuilds() { buildsTurn++; S.builds = null; }
+  function loadBuilds() {
+    var mine = gen, turn = ++buildsTurn;
+    S.builds = { loading: true, data: S.builds ? S.builds.data : null };
+    if (S.stage === 'list') drawPage();
+    rpc('owner_builds_read', {}).then(function (r) {
+      if (mine !== gen || turn !== buildsTurn || !S.builds) return;
+      if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
+      if (SECOND(r)) { needSecond(); return; }
+      S.builds.loading = false;
+      if (r.ok && r.data && Array.isArray(r.data.builds)) { S.builds.data = r.data; S.builds.failed = ''; }
+      else S.builds.failed = r.status === 404 ? 'This is not switched on yet.' : r.status === 0 ? 'No answer came back. Tap Refresh.'
+        : NOT_OWNER(r) ? 'This account is not the owner.' : 'The builds could not be read just now.';
+      if (S.stage === 'list') drawPage();
+    });
+  }
+  var MARKS = { tried: 'Tried', not_right: 'Not right' };
+  function findLine(id) {
+    var out = null;
+    ((S.builds && S.builds.data && S.builds.data.builds) || []).forEach(function (b) {
+      (b.lines || []).forEach(function (l) { if (l.id === id) out = { build: b, line: l }; });
+    });
+    return out;
+  }
+  function viewBuilds() {
+    var B = S.builds || {};
+    var head = '<h1 class="day">What is new to test</h1>';
+    if (!B.data) return head + '<section class="card"><h2 class="card-title">Builds</h2><p class="fine center">' + esc(B.failed || 'Reading.') + '</p></section>';
+    var builds = B.data.builds;
+    if (!builds.length) {
+      return head + '<section class="card"><h2 class="card-title">Builds</h2><p class="fine center">No build has its list yet. The next TestFlight build brings one.</p></section>';
+    }
+    var cards = builds.map(function (b, i) {
+      var lines = b.lines || [];
+      var tried = lines.filter(function (l) { return l.state === 'tried'; }).length;
+      var wrong = lines.filter(function (l) { return l.state === 'not_right'; }).length;
+      var open = Object.prototype.hasOwnProperty.call(S.bopen, b.build) ? !!S.bopen[b.build] : i === 0;
+      var rows = lines.map(function (l) {
+        var on = l.state;
+        return '<div class="bline' + (on === 'tried' ? ' tried' : on === 'not_right' ? ' wrong' : '') + '"><p>' + esc(l.body) + '</p><div class="acts">' +
+          '<button class="btn small' + (on === 'tried' ? ' on' : '') + '" data-act="bmark" data-id="' + esc(l.id) + '" data-on="' + (on === 'tried' ? 'new' : 'tried') + '">' + (on === 'tried' ? 'Tried ✓' : 'Tried it') + '</button>' +
+          '<button class="btn small' + (on === 'not_right' ? ' red' : '') + '" data-act="bmark" data-id="' + esc(l.id) + '" data-on="' + (on === 'not_right' ? 'new' : 'not_right') + '">Not right</button>' +
+          '</div></div>';
+      }).join('');
+      var sub = (i === 0 ? 'Newest · made ' : 'Made ') + day(new Date(b.made_at)) + (b.since ? ' · new since build ' + text(b.since) : '') +
+        (wrong ? ' · ' + wrong + ' not right' : '');
+      return '<div class="grp' + (open ? ' open' : '') + '"><button class="grp-head" data-act="bopen" data-id="' + esc(b.build) + '" aria-expanded="' + open + '">' +
+        '<span class="grow"><span class="ttl">Build ' + esc(b.build) + '</span><small' + (wrong ? ' class="bad"' : '') + '>' + esc(sub) + '</small></span>' +
+        '<span class="chip num' + (tried + wrong === lines.length && lines.length ? ' on' : '') + '">' + (tried + wrong) + ' / ' + lines.length + '</span></button>' +
+        '<div class="sug-body"><div><div class="grp-in blines">' + (rows || '<p class="fine">No lines.</p>') + '</div></div></div></div>';
+    }).join('');
+    return head + '<section class="card"><h2 class="card-title">Builds · ' + builds.length + '</h2>' +
+      '<p class="fine center">One line for each thing that is new in a TestFlight build. Tap TRIED IT once it works. NOT RIGHT adds an item to your list, so you can say what is wrong.</p>' +
+      (B.failed ? '<p class="msg-line warn" role="alert">' + esc(B.failed) + '</p>' : '') +
+      '<div class="sugs">' + cards + '</div></section>';
   }
 
   // A SMALL MARKDOWN READER, for the two documents. The stored words are
@@ -1889,7 +1967,7 @@
     else if (S.stage === 'offline') v.innerHTML = '<section class="card"><h1 class="card-title">No connection</h1><p class="fine center">The list could not be reached. Nothing is lost: it is kept in the database.</p><button class="btn wide" data-act="reload">Try again</button></section>';
     else if (S.stage === 'notowner') v.innerHTML = '<section class="card"><h1 class="card-title">Not the owner</h1><p class="fine center">This page opens only for the owner of CountAble. The account you signed in with is not it.</p><button class="btn wide" data-act="signoutgo">Sign out</button></section>';
     else if (S.stage === 'second') v.innerHTML = viewSecond();
-    else if (S.stage === 'list' && S.list) v.innerHTML = viewTabs() + (S.tab === 'coach' ? viewCoach() : isDocTab(S.tab) ? viewDoc(S.tab) : viewList());
+    else if (S.stage === 'list' && S.list) v.innerHTML = viewTabs() + (S.tab === 'coach' ? viewCoach() : isDocTab(S.tab) ? viewDoc(S.tab) : S.tab === 'builds' ? viewBuilds() : viewList());
     else v.innerHTML = viewSignIn();
   }
 
@@ -1912,6 +1990,8 @@
         if (S.tab === 'coach' && !(S.coach && S.coach.loading)) loadCoach();
         // So are the documents, while one of them is the tab showing.
         if (isDocTab(S.tab) && !(S.docs && S.docs.loading)) loadDocs();
+        // And the builds, while theirs is the tab showing (a mark comes back this way).
+        if (S.tab === 'builds' && !(S.builds && S.builds.loading)) loadBuilds();
         // Typing that was kept across a sign-out comes back.
         if (S.pending) { var kept = S.pending; S.pending = null; stack.length = 0; stack.push(kept); drawSheet(); }
       } else if (r.status === 401) {
@@ -2082,7 +2162,7 @@
     signoutgo: function (d) {
       var token = session && session.access_token, everywhere = !!(d && d.all);
       gen++;                                   // every call still in the air is now too late to matter
-      keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); S.tab = 'home'; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
+      keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); forgetBuilds(); S.tab = 'home'; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
       stack.length = 0; drawSheet(); drawPage();
       if (!token) return;
       // First the database forgets that this sign-in passed (or, for every
@@ -2294,10 +2374,34 @@
     // The tabs. The Coach tab's two reads, and the documents' one, are asked
     // for here, when the tab is opened.
     tab: function (d) {
-      S.tab = d.id === 'coach' || isDocTab(d.id) ? d.id : 'home';
+      S.tab = d.id === 'coach' || d.id === 'builds' || isDocTab(d.id) ? d.id : 'home';
       if (S.tab === 'coach' && !(S.coach && (S.coach.data || S.coach.loading))) loadCoach();
       else if (isDocTab(S.tab) && !(S.docs && (S.docs.data || S.docs.loading))) loadDocs();
+      else if (S.tab === 'builds' && !(S.builds && (S.builds.data || S.builds.loading))) loadBuilds();
       else drawPage();
+    },
+    // A build folded open or shut, as a section of the list is.
+    bopen: function (d, el) {
+      var b = (S.builds && S.builds.data && S.builds.data.builds) || [];
+      var first = b.length && String(b[0].build) === String(d.id);
+      var was = Object.prototype.hasOwnProperty.call(S.bopen, d.id) ? !!S.bopen[d.id] : first;
+      S.bopen[d.id] = !was;
+      el.closest('.grp').classList.toggle('open', S.bopen[d.id]);
+      el.setAttribute('aria-expanded', String(S.bopen[d.id]));
+    },
+    // A line's mark. The mark is sent, not toggled, so a second tap changes
+    // nothing. NOT RIGHT then opens a new item for his list, the sentence
+    // filled in, for him to say what is wrong (or to close).
+    bmark: function (d, el) {
+      var hit = findLine(d.id), st = d.on;
+      if (!hit || !Object.prototype.hasOwnProperty.call(MARKS, st) && st !== 'new') return;
+      change(el, 'owner_build_mark', { _line: d.id, _state: st }, st === 'new' ? 'Mark taken off' : 'Marked ' + MARKS[st].toLowerCase(), function () {
+        hit.line.state = st;
+        if (st !== 'not_right' || !S.list) return;
+        var entry = itemEntry(null);
+        entry.orig.body = 'Build ' + text(hit.build.build) + ', not right: ' + text(hit.line.body) + ' What is wrong: ';
+        openEntry(entry);
+      });
     },
     coachdays: function (d) { var n = Number(d.id); if (COACH_DAYS.indexOf(n) < 0 || n === S.coachDays) return; S.coachDays = n; loadCoach(); },
     coachwho: function (d) { if (!d.id) return; S.coachWho = d.id; loadCoach(); },

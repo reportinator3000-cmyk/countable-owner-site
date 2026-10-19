@@ -237,3 +237,12 @@ label.field .micro{color:var(--w80)}
 .code{font-size:26px;font-weight:900;letter-spacing:.14em;text-align:center;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;-webkit-user-select:all;user-select:all}
 a.btn{text-decoration:none;color:inherit}
 a.btn.amber{color:var(--ink)}
+/* the builds (the Builds tab, Oct 18 2026): alone on the last row of tabs, it spans it */
+.tabs .btn:last-child:nth-child(odd){grid-column:1/-1}
+.blines{display:flex;flex-direction:column}
+.bline{display:flex;flex-direction:column;gap:10px;padding:12px 0;min-width:0}
+.bline + .bline{border-top:1px solid var(--hair)}
+.bline p{font-size:15px;line-height:1.4;overflow-wrap:anywhere}
+.bline.tried p{color:var(--w70)}
+.bline.wrong p{color:var(--red)}
+.grp-head small.bad{color:var(--red)}
