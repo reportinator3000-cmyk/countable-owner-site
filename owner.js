@@ -1180,12 +1180,13 @@
   // Asked for when the tab is opened (and again with the list while it is
   // showing, which is how a mark comes back), never before. Held in S.builds
   // only, and forgotten at every sign-out.
-  var buildsTurn = 0;
+  var buildsTurn = 0, practiceTurn = 0;
   function forgetBuilds() { buildsTurn++; S.builds = null; }
   function loadBuilds() {
     var mine = gen, turn = ++buildsTurn;
-    S.builds = { loading: true, data: S.builds ? S.builds.data : null };
+    S.builds = { loading: true, data: S.builds ? S.builds.data : null, practice: S.builds ? S.builds.practice : null };
     if (S.stage === 'list') drawPage();
+    loadPractice();
     rpc('owner_builds_read', {}).then(function (r) {
       if (mine !== gen || turn !== buildsTurn || !S.builds) return;
       if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
@@ -1197,6 +1198,60 @@
       if (S.stage === 'list') drawPage();
     });
   }
+  // THE PRACTICE RUN (owner, Oct 22 2026: "build the practice sign-in started
+  // from my dashboard"). The run waiting now (a made-up number, good for
+  // thirty minutes and one sign-in) and how many there have been: read with
+  // the builds, held in S.builds only, forgotten at every sign-out. The
+  // number belongs to nobody; the code it asks for is texted to his phone.
+  function loadPractice() {
+    var mine = gen, turn = ++practiceTurn;
+    rpc('owner_practice_read', {}).then(function (r) {
+      if (mine !== gen || turn !== practiceTurn || !S.builds) return;
+      if (r.status === 401 || SECOND(r)) return;          // the builds' own read says so
+      S.builds.practice = r.ok && r.data ? r.data : S.builds.practice;
+      S.builds.practiceFailed = r.ok ? '' : r.status === 404 ? 'missing' : 'unreadable';
+      if (S.stage === 'list') drawPage();
+    });
+  }
+  function practicePhone(e164) {
+    var d = String(e164 || '').replace(/^\+1/, '');
+    return d.length === 10 ? '(' + d.slice(0, 3) + ') ' + d.slice(3, 6) + '-' + d.slice(6) : '';
+  }
+  function practiceClock(iso) {
+    var t = new Date(iso);
+    return isNaN(t.getTime()) ? '' : t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+  function viewPractice() {
+    var B = S.builds || {}, P = B.practice;
+    if (B.practiceFailed === 'missing') return '';           // not switched on yet
+    var live = P && P.live && new Date(P.live.expires_at) > new Date() ? P.live : null;
+    var mins = (P && Number(P.minutes)) || 30;
+    var runs = P ? Number(P.runs) || 0 : 0;
+    var title = '<h2 class="card-title">Try it as a new user</h2>';
+    if (!live) {
+      return '<section class="card">' + title +
+        '<p class="fine center">Go through the app from the very start as a brand-new person, as many times as you like. Your own account is never touched.</p>' +
+        '<button class="btn amber" data-act="pstart">Start a practice run</button>' +
+        '<p class="fine center">You get a made-up number, good for ' + mins + ' minutes and one sign-in. The code it asks for comes to your phone by text.' +
+        (runs ? ' Practice runs so far: ' + runs + '.' : '') + '</p>' +
+        (B.practiceFailed ? '<p class="msg-line warn" role="alert">The practice run could not be read just now.</p>' : '') +
+        '</section>';
+    }
+    return '<section class="card">' + title +
+      '<p class="stat calm num">' + esc(practicePhone(live.phone)) + '</p>' +
+      '<p class="fine center">Good until ' + esc(practiceClock(live.expires_at)) + ', for one sign-in.</p>' +
+      '<div class="md"><ol>' +
+      '<li>In the app, sign out of your own account: DATA, then ACCOUNT, then Sign Out.</li>' +
+      '<li>Delete CountAble from your phone and install it again from TestFlight, so your iPhone asks for the microphone and Health again, as it does on a new phone.</li>' +
+      '<li>Open it, type the number above, and tap TEXT ME A CODE.</li>' +
+      '<li>The practice code comes to your phone by text. Type it in, or tap it above the keyboard.</li>' +
+      '<li>When you are done, sign out the same way and sign back in with your own number.</li>' +
+      '</ol></div>' +
+      '<p class="fine center">Every run is a brand-new account. The next run wipes this practice account. Practice accounts are never counted as people.</p>' +
+      '<button class="link" data-act="pstart">Start a new one instead</button>' +
+      '</section>';
+  }
+
   var MARKS = { tried: 'Tried', not_right: 'Not right' };
   function findLine(id) {
     var out = null;
@@ -1207,7 +1262,7 @@
   }
   function viewBuilds() {
     var B = S.builds || {};
-    var head = '<h1 class="day">What is new to test</h1>';
+    var head = '<h1 class="day">What is new to test</h1>' + viewPractice();
     if (!B.data) return head + '<section class="card"><h2 class="card-title">Builds</h2><p class="fine center">' + esc(B.failed || 'Reading.') + '</p></section>';
     var builds = B.data.builds;
     if (!builds.length) {
@@ -2395,6 +2450,27 @@
     // A line's mark. The mark is sent, not toggled, so a second tap changes
     // nothing. NOT RIGHT then opens a new item for his list, the sentence
     // filled in, for him to say what is wrong (or to close).
+    // START A PRACTICE RUN. Its id is kept until an answer says it worked, so
+    // a second tap after a lost answer is the SAME run, never a second one.
+    pstart: function (d, el) {
+      if (S.busy || !S.builds) return;
+      if (!S.practiceId) S.practiceId = newId();
+      var release = hold(el), mine = gen;
+      rpc('owner_practice_start', { _id: S.practiceId }).then(function (r) {
+        if (mine !== gen) { S.busy = false; return; }
+        if (r.ok && r.data) {
+          S.busy = false; S.practiceId = null;
+          if (S.builds) { S.builds.practice = r.data; S.builds.practiceFailed = ''; }
+          toast('Your practice number is ready');
+          drawPage();
+          return;
+        }
+        if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
+        if (SECOND(r)) { needSecond(); return; }
+        release();
+        toast(r.status === 0 ? 'No answer came back. Tap it again.' : NOT_OWNER(r) ? 'This account is not the owner.' : 'The practice run could not be started just now.');
+      });
+    },
     bmark: function (d, el) {
       var hit = findLine(d.id), st = d.on;
       if (!hit || !Object.prototype.hasOwnProperty.call(MARKS, st) && st !== 'new') return;
