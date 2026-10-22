@@ -424,7 +424,7 @@
     delivery: 'Texts are not reaching phones',
     report: 'The twice-daily report is not landing',
     coaching_credit: 'Your coaching credit is low',
-    spend_tripwire: 'Today\u2019s AI spend passed your tripwire',
+    spend_tripwire: 'Today\u2019s spend passed your tripwire',
     inbound_flood: 'Texts flooded in to the coach\u2019s number'
   };
   // His own coaching credit is told at three marks, and the alarm carries
@@ -481,7 +481,10 @@
       ? '<div class="kv"><span>Tripwire</span><b>off</b></div>'
       : '<div class="kv"><span>Tripwire</span><b' + (m.tripwire_passed ? ' class="hot"' : '') + '>' + usd(m.tripwire_usd) + ' a day' + (m.tripwire_passed ? ' · passed' : '') + '</b></div>';
     return '<section class="card"><h2 class="card-title">AI balance</h2>' + body +
-      '<div class="list"><div class="kv"><span>Spent today</span><b>' + usd(m.today_usd || 0) + '</b></div>' + trip + '</div>' +
+      // Spent today is the AI and the texts (Oct 22 2026), what the tripwire holds.
+      '<div class="list"><div class="kv"><span>Spent today, AI and texts</span><b>' + usd(m.today_usd || 0) + '</b></div>' +
+      (m.today_ai_usd === null || m.today_ai_usd === undefined ? '' :
+        '<div class="kv"><span>Of that, texts</span><b>' + usd(m.today_texts_usd || 0) + '</b></div>') + trip + '</div>' +
       '<div class="pair"><button class="btn amber" data-act="topup">I topped up</button><button class="btn" data-act="tripwire">Tripwire</button></div>' +
       '<button class="link" data-act="balance">The billing page says a different number</button></section>';
   }
@@ -1560,7 +1563,7 @@
     },
     tripwire: function () {
       var m = S.list.money || {};
-      return { html: pop('Tripwire', 'Email me if one day\u2019s AI spend passes this. It warns and stops nothing. 0 turns it off.',
+      return { html: pop('Tripwire', 'Email me if one day\u2019s spend, the AI and the texts, passes this. It warns and stops nothing. 0 turns it off.',
         '<label class="field" for="twire"><span class="micro muted">Dollars a day</span><input class="well code" id="twire" inputmode="decimal" placeholder="5.00" value="' + esc(m.tripwire_usd === null || m.tripwire_usd === undefined ? '' : m.tripwire_usd) + '"></label>' +
         '<div class="pair">' + cancel + '<button class="btn amber" data-act="tripwirego">Save</button></div>') };
     },
