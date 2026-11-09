@@ -462,21 +462,48 @@
       '<button class="btn wide" data-act="check">Run the health check</button>' +
       (L.checked_at ? '<p class="fine center">Last asked ' + esc(when(L.checked_at)) + '.</p>' : '') + older + '</section>';
   }
-  function viewMoney() {
-    var m = S.list.money || {};
+  // ONE BALANCE PER COMPANY (owner, Nov 8 2026: "make sure that my
+  // dashboard tracks both Anthropic and ChatGPT. Right now, it seems to
+  // combine them."). Each account is its own recorded number, minus what
+  // that company's calls have priced since (owner_money, migration
+  // 20261108140000). The links are where credits are bought.
+  var PROVIDERS = [
+    { id: 'anthropic', name: 'Anthropic', what: 'Claude, the house coach', billing: 'https://platform.claude.com/settings/billing' },
+    { id: 'openai', name: 'OpenAI', what: 'the ChatGPT coaches and voice calls', billing: 'https://platform.openai.com/settings/organization/billing/overview' }
+  ];
+  var providerById = function (id) { return PROVIDERS.filter(function (p) { return p.id === id; })[0] || PROVIDERS[0]; };
+  // Which company served a call, by its model name: THE SAME RULE as
+  // public.ai_provider_of and aiProviderOf in _shared/watchdog.ts.
+  var OPENAI_MODEL = /^(gpt|chatgpt|o[0-9]|whisper|tts|dall-e|text-embedding)/i;
+  var providerOf = function (model) { return OPENAI_MODEL.test(String(model || '')) ? 'openai' : 'anthropic'; };
+  function viewAccount(p, a) {
     var body;
-    if (m.recorded_usd === null || m.recorded_usd === undefined) {
-      body = '<p class="stat calm">No balance recorded</p><p class="fine center">Tell the page what the AI billing page shows, and it will estimate how long it lasts.</p>';
+    if (!a || a.recorded_usd === null || a.recorded_usd === undefined) {
+      body = '<p class="stat calm">No balance recorded</p><p class="fine center">Tell the page what ' + esc(p.name) + '\u2019s billing page shows, and it will estimate how long it lasts.</p>';
     } else {
-      var left = Math.max(0, Number(m.remaining_usd));
-      var pace = daysPhrase(m.days_left);
-      body = '<p class="stat' + (m.low ? '' : ' calm') + '">' + (left <= 0 ? 'Empty' : (pace || usd(left) + ' left')) + '</p>' +
+      var left = Math.max(0, Number(a.remaining_usd));
+      var pace = daysPhrase(a.days_left);
+      body = '<p class="stat' + (a.low ? '' : ' calm') + '">' + (left <= 0 ? 'Empty' : (pace || usd(left) + ' left')) + '</p>' +
         '<div class="list">' +
           '<div class="kv"><span>Left, by estimate</span><b>about ' + usd(left) + '</b></div>' +
-          '<div class="kv"><span>Pace, last 7 days</span><b>' + usd(m.burn_per_day_usd || 0) + ' a day</b></div>' +
-          '<div class="kv"><span>Recorded</span><b>' + usd(m.recorded_usd) + ' · ' + esc(day(new Date(m.as_of))) + '</b></div>' +
-        '</div><p class="fine">The amount you recorded, minus what the app has priced since. It is not read from the provider, so check the real number when it matters.</p>';
+          '<div class="kv"><span>Pace, last 7 days</span><b>' + usd(a.burn_per_day_usd || 0) + ' a day</b></div>' +
+          (a.today_usd === null || a.today_usd === undefined ? '' : '<div class="kv"><span>Spent today</span><b>' + usd(a.today_usd) + '</b></div>') +
+          '<div class="kv"><span>Recorded</span><b>' + usd(a.recorded_usd) + ' · ' + esc(day(new Date(a.as_of))) + '</b></div>' +
+        '</div>';
     }
+    return '<p class="micro muted center">' + esc(p.name) + ' · ' + esc(p.what) + '</p>' + body +
+      '<a class="btn wide" href="' + esc(p.billing) + '" target="_blank" rel="noopener noreferrer">Add credits on ' + esc(p.name) + '</a>' +
+      '<div class="pair"><button class="btn amber" data-act="topup" data-provider="' + p.id + '">I topped up</button>' +
+      '<button class="btn" data-act="balance" data-provider="' + p.id + '">Says a different number</button></div>';
+  }
+  function viewMoney() {
+    var m = S.list.money || {};
+    // An older database answers one account: the top level, which was Anthropic's.
+    var split = !!(m.anthropic || m.openai);
+    var body = PROVIDERS.map(function (p) {
+      return viewAccount(p, split ? m[p.id] : (p.id === 'anthropic' ? m : null));
+    }).join('') +
+      '<p class="fine">Each is the amount you recorded, minus what the app has priced for that company since. It is not read from the companies, so check the real number when it matters.</p>';
     var trip = m.tripwire_usd === null || m.tripwire_usd === undefined
       ? '<div class="kv"><span>Tripwire</span><b>off</b></div>'
       : '<div class="kv"><span>Tripwire</span><b' + (m.tripwire_passed ? ' class="hot"' : '') + '>' + usd(m.tripwire_usd) + ' a day' + (m.tripwire_passed ? ' · passed' : '') + '</b></div>';
@@ -485,8 +512,7 @@
       '<div class="list"><div class="kv"><span>Spent today, AI and texts</span><b>' + usd(m.today_usd || 0) + '</b></div>' +
       (m.today_ai_usd === null || m.today_ai_usd === undefined ? '' :
         '<div class="kv"><span>Of that, texts</span><b>' + usd(m.today_texts_usd || 0) + '</b></div>') + trip + '</div>' +
-      '<div class="pair"><button class="btn amber" data-act="topup">I topped up</button><button class="btn" data-act="tripwire">Tripwire</button></div>' +
-      '<button class="link" data-act="balance">The billing page says a different number</button></section>';
+      '<button class="btn wide" data-act="tripwire">Tripwire</button></section>';
   }
 
   /* ---------- the people ---------- */
@@ -939,7 +965,13 @@
     return D.jobs.map(function (j) {
       var s = sh.jobs.filter(function (x) { return x.kind === j.kind; })[0];
       if (!s) return j.calls ? 'A job the sheet does not know ran: ' + text(j.kind).replace(/_/g, ' ') + '.' : '';
-      var other = (j.models || []).filter(function (m) { return !sameModel(m, s.model) && !sameModel(m, s.model_lite); });
+      // A job an athlete's coach brain changes (Oct 27 2026) may run on any
+      // model a brain names: that is not a disagreement.
+      var brainModels = (s.brains && s.brains.models) || [];
+      var other = (j.models || []).filter(function (m) {
+        return !sameModel(m, s.model) && !sameModel(m, s.model_lite) &&
+          !brainModels.some(function (b) { return sameModel(m, b); });
+      });
       return other.length ? s.name + ' also ran on ' + other.join(' and ') + '.' : '';
     }).filter(Boolean);
   }
@@ -961,6 +993,10 @@
       return '<section class="card"><h2 class="card-title">The coach</h2><p class="fine center">' + (C.failed ? esc(C.failed) : 'Reading.') + '</p></section>';
     }
     var T = D.totals, person = D.person;
+    // The cost by company (Nov 8 2026), from the cost of each model.
+    var byCo = (D.models || []).length ? (D.models || []).reduce(function (acc, x) {
+      acc[providerOf(x.model)] += Number(x.cost_cents) || 0; return acc;
+    }, { anthropic: 0, openai: 0 }) : null;
     var span = '<div class="three">' + COACH_DAYS.map(function (n) {
       return '<button class="btn small' + (S.coachDays === n ? ' on' : '') + '" data-act="coachdays" data-id="' + n + '">' + (n === 1 ? '1 day' : n + ' days') + '</button>';
     }).join('') + '</div>';
@@ -971,6 +1007,7 @@
       (person ? '<p class="fine center">Only ' + esc(person.name || 'this person') + '.</p><button class="link" data-act="coachall">Show everyone</button>' : '') +
       '<p class="stat' + (T.errors ? '' : ' calm') + '">' + esc(money(T.cost_cents)) + ' · ' + esc(plural(T.calls, 'call', 'calls')) + '</p>' +
       (chips ? '<div class="chips mid">' + chips + '</div>' : '') +
+      (byCo ? '<div class="list"><div class="kv"><span>Anthropic (Claude)</span><b>' + esc(money(byCo.anthropic)) + '</b></div><div class="kv"><span>OpenAI (ChatGPT, voice)</span><b>' + esc(money(byCo.openai)) + '</b></div></div>' : '') +
       '<p class="fine center">It read ' + esc(compact(T.tokens_in)) + ' tokens and wrote ' + esc(compact(T.tokens_out)) + '. A token is about three quarters of a word.</p>' +
       (D.demo && D.demo.calls ? '<p class="fine center">Of that, ' + esc(plural(D.demo.calls, 'call', 'calls')) + ' (' + esc(money(D.demo.cost_cents)) + ') were demo accounts: the ones the films are shot on and Apple’s reviewers sign in with. They are counted because they cost real money, and named nowhere.</p>' : '') +
       (C.failed ? '<p class="msg-line warn" role="alert">' + esc(C.failed) + '</p>' : '') + '</section>';
@@ -1605,14 +1642,16 @@
         '<label class="field" for="snote"><span class="micro muted">What you did about it (optional)</span><textarea class="well" id="snote" maxlength="1000" placeholder="Kept with the alarm."></textarea></label>' +
         '<div class="pair">' + cancel + '<button class="btn amber" data-act="seengo" data-id="' + esc(a.id) + '">Seen</button></div>') };
     },
-    topup: function () {
-      return { html: pop('I topped up', 'How much did you add on the AI billing page?',
+    topup: function (a) {
+      var p = providerById(a.provider);
+      return { html: pop('I topped up · ' + p.name, 'How much did you add on ' + p.name + '\u2019s billing page?',
         '<div class="three"><button class="btn small amber" data-act="topupgo" data-usd="25">$25</button><button class="btn small amber" data-act="topupgo" data-usd="50">$50</button><button class="btn small amber" data-act="topupgo" data-usd="100">$100</button></div>' +
         '<label class="field" for="tother"><span class="micro muted">Or another amount</span><input class="well" id="tother" inputmode="decimal" placeholder="40"></label>' +
         '<div class="pair">' + cancel + '<button class="btn" data-act="topupgo" data-usd="">Add it</button></div>') };
     },
-    balance: function () {
-      return { html: pop('The exact balance', 'Type what the AI billing page shows right now. The estimate starts again from it.',
+    balance: function (a) {
+      var p = providerById(a.provider);
+      return { html: pop('The exact balance · ' + p.name, 'Type what ' + p.name + '\u2019s billing page shows right now. The estimate starts again from it.',
         '<label class="field" for="bexact"><span class="micro muted">Dollars</span><input class="well code" id="bexact" inputmode="decimal" placeholder="60.00"></label>' +
         '<div class="pair">' + cancel + '<button class="btn amber" data-act="balancego">Save</button></div>') };
     },
@@ -2517,21 +2556,23 @@
     },
 
     // The AI balance.
-    topup: function () { openSheet('topup'); },
+    topup: function (d) { openSheet('topup', { provider: providerById(d.provider).id }); },
     topupgo: function (d, el) {
       var n = d.usd ? Number(d.usd) : parseFloat(val('#tother').replace(/[^0-9.]/g, ''));
       if (!(n >= 1 && n <= 5000)) { toast('Type an amount between $1 and $5,000'); return; }
       // The id is made here and kept until the answer comes back, so a second
       // tap after a lost answer is the SAME top-up and is counted once.
-      var slot = 'topup:' + n;
+      var p = providerById((stack[stack.length - 1] || {}).provider);
+      var slot = 'topup:' + p.id + ':' + n;
       if (!S.asked[slot]) S.asked[slot] = newId();
-      change(el, 'owner_ai_topup', { _add_usd: n, _id: S.asked[slot] }, 'Added ' + usd(n) + ' to the estimate', function () { delete S.asked[slot]; closeAll(); });
+      change(el, 'owner_ai_topup', { _add_usd: n, _id: S.asked[slot], _provider: p.id }, 'Added ' + usd(n) + ' to the ' + p.name + ' estimate', function () { delete S.asked[slot]; closeAll(); });
     },
-    balance: function () { openSheet('balance'); },
+    balance: function (d) { openSheet('balance', { provider: providerById(d.provider).id }); },
     balancego: function (d, el) {
+      var p = providerById((stack[stack.length - 1] || {}).provider);
       var n = parseFloat(val('#bexact').replace(/[^0-9.]/g, ''));
       if (!(n >= 0 && n <= 100000)) { toast('Type the dollar amount the billing page shows'); return; }
-      change(el, 'owner_ai_balance_set', { _usd: n }, 'Balance recorded', closeAll);
+      change(el, 'owner_ai_balance_set', { _usd: n, _provider: p.id }, p.name + ' balance recorded', closeAll);
     },
     tripwire: function () { openSheet('tripwire'); },
     tripwirego: function (d, el) {
