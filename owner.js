@@ -301,7 +301,7 @@
     codeSent: false,           // a code was emailed for this sign-in: show the box to type it in
     people: null,              // the people and the invite link, read after the list (null = not read yet)
     texts: null,               // ONE person's texts while their sheet is open; memory only, never stored
-    tab: 'home',               // home | coach | cost | marketing | builds; memory only
+    tab: 'home',               // home | people | list | coach | cost | marketing | builds; memory only
     coach: null,               // what ran and the sheet, read when the Coach tab is opened
     docs: null,                // the two documents, read when the Costs or Marketing tab is opened; memory only, never stored
     builds: null,              // what is new in each build, read when the Builds tab is opened; memory only, never stored
@@ -441,24 +441,53 @@
   }
   // An alarm whose email failed is the one he was never told about: say so.
   function alarmLine(a) { return (a.unsent ? 'Its email did not go out: ' : '') + alarmTitle(a); }
+  // The ids of the alarms shown on the same row as this one (seen or not, as it is).
+  function alarmMates(id) {
+    var all = (S.list && S.list.alarms) || [], me = all.filter(function (x) { return x.id === id; })[0];
+    if (!me) return [id];
+    var k = function (a) { return text(a.condition) + '|' + text(a.ref) + '|' + (a.unsent ? 1 : 0) + '|' + (a.seen_at ? 1 : 0); };
+    return all.filter(function (x) { return k(x) === k(me); }).map(function (x) { return x.id; });
+  }
+  // ONE LINE PER KIND OF ALARM (owner, Nov 9 2026: "i dont need to see the
+  // same AI credits are low warning 10 times in a row, one is enough in
+  // there"). Alarms of the same kind (and the same mark) are one row that
+  // says how many times it came and when it last did; Seen marks them all.
+  function alarmGroups(list) {
+    var by = {}, out = [];
+    list.forEach(function (a) {
+      var k = text(a.condition) + '|' + text(a.ref) + '|' + (a.unsent ? 1 : 0);
+      if (!by[k]) { by[k] = { key: k, first: a, items: [] }; out.push(by[k]); }
+      by[k].items.push(a);
+    });
+    out.forEach(function (g) {
+      g.items.sort(function (x, y) { return String(y.at).localeCompare(String(x.at)); });
+      g.last = g.items[0];
+    });
+    out.sort(function (x, y) { return String(y.last.at).localeCompare(String(x.last.at)); });
+    return out;
+  }
+  function groupWhen(g) {
+    var n = g.items.length;
+    return n === 1 ? when(g.last.at) : n + ' times · last ' + when(g.last.at);
+  }
   function viewToday() {
     var L = S.list, alarms = L.alarms || [];
-    var fresh = alarms.filter(function (a) { return !a.seen_at; }), seen = alarms.filter(function (a) { return a.seen_at; });
-    var rows = fresh.map(function (a) {
-      return '<div class="row"><span class="grow"><b>' + esc(alarmLine(a)) + '</b><small>' + esc(when(a.at)) + '</small></span>' +
-        '<button class="btn small amber" data-act="seen" data-id="' + esc(a.id) + '">Seen</button></div>';
+    var fresh = alarmGroups(alarms.filter(function (a) { return !a.seen_at; })), seen = alarmGroups(alarms.filter(function (a) { return a.seen_at; }));
+    var rows = fresh.map(function (g) {
+      return '<div class="row"><span class="grow"><b>' + esc(alarmLine(g.last)) + '</b><small>' + esc(groupWhen(g)) + '</small></span>' +
+        '<button class="btn small amber" data-act="seen" data-id="' + esc(g.last.id) + '">Seen</button></div>';
     }).join('');
     var older = '';
     if (seen.length) {
       older = '<button class="link" data-act="showseen">' + (S.showSeen ? 'Hide seen' : 'Seen · ' + seen.length) + '</button>';
-      if (S.showSeen) older += '<div class="list">' + seen.map(function (a) {
-        return '<div class="row"><span class="grow"><b>' + esc(alarmLine(a)) + '</b><small>' + esc(when(a.at)) + (a.note ? ' · ' + esc(a.note) : '') + '</small></span></div>';
+      if (S.showSeen) older += '<div class="list">' + seen.map(function (g) {
+        return '<div class="row"><span class="grow"><b>' + esc(alarmLine(g.last)) + '</b><small>' + esc(groupWhen(g)) + (g.last.note ? ' · ' + esc(g.last.note) : '') + '</small></span></div>';
       }).join('') + '</div>';
     }
     return '<section class="card' + (fresh.length ? ' verdict' : '') + '"><h2 class="card-title">Today</h2>' +
       (fresh.length
         ? '<p class="stat">' + fresh.length + (fresh.length === 1 ? ' alarm to look at' : ' alarms to look at') + '</p><div class="list">' + rows + '</div>'
-        : '<p class="stat calm">No new alarm</p><p class="fine center">Nothing new is waiting for you here. The watch emails each kind of problem once a day, so a second one of the same kind today does not show again: read the email too.</p>') +
+        : '<p class="stat calm">No new alarm</p><p class="fine center">Nothing new is waiting for you here. Each kind of problem is emailed once a day, so read the email too.</p>') +
       '<button class="btn wide" data-act="check">Run the health check</button>' +
       (L.checked_at ? '<p class="fine center">Last asked ' + esc(when(L.checked_at)) + '.</p>' : '') + older + '</section>';
   }
@@ -494,7 +523,7 @@
     return '<p class="micro muted center">' + esc(p.name) + ' · ' + esc(p.what) + '</p>' + body +
       '<a class="btn wide" href="' + esc(p.billing) + '" target="_blank" rel="noopener noreferrer">Add credits on ' + esc(p.name) + '</a>' +
       '<div class="pair"><button class="btn amber" data-act="topup" data-provider="' + p.id + '">I topped up</button>' +
-      '<button class="btn" data-act="balance" data-provider="' + p.id + '">Says a different number</button></div>';
+      '<button class="btn" data-act="balance" data-provider="' + p.id + '">Fix the number</button></div>';
   }
   function viewMoney() {
     var m = S.list.money || {};
@@ -859,9 +888,9 @@
     }
     return '<section class="card' + (open.length ? ' verdict' : '') + '"><h2 class="card-title">Reports' + (open.length ? ' · ' + open.length + ' open' : '') + '</h2>' +
       (open.length
-        ? '<p class="stat">' + (open.length === 1 ? '1 report to look at' : open.length + ' reports to look at') + '</p><div class="list">' + open.map(reportRow).join('') + '</div>'
-        : '<p class="stat calm">Nothing reported</p>') +
-      '<p class="fine center">Messages someone reported in a team chat. Open one to read it, then hide it for everyone or keep it. Each opening is recorded.</p>' + older + '</section>';
+        ? '<p class="stat">' + (open.length === 1 ? '1 report to look at' : open.length + ' reports to look at') + '</p><div class="list">' + open.map(reportRow).join('') + '</div>' +
+          '<p class="fine center">Messages someone reported in a team chat. Open one to read it, then hide it for everyone or keep it. Each opening is recorded.</p>'
+        : '<p class="fine center">Nothing reported in the team chats.</p>') + older + '</section>';
   }
 
   /* ---------- the coach ---------- */
@@ -978,12 +1007,35 @@
   // The page's tabs, two to a row. Costs and Marketing (Oct 14 2026) are the
   // two documents, by the name each has in the database. Builds (Oct 18 2026)
   // is what is new in each TestFlight build; alone on its row, it spans it.
-  var TABS = [{ id: 'home', name: 'Dashboard' }, { id: 'coach', name: 'Coach' }, { id: 'cost', name: 'Costs' }, { id: 'marketing', name: 'Marketing' }, { id: 'builds', name: 'Builds' }];
+  // SIX TABS, EACH ONE KIND OF THING (owner, Nov 9 2026: "the dashboard is
+  // feeling cluttered ... i have to bounce between pages to get a simulator
+  // number and then a coupon- these and other related items should be closer
+  // to each other"). Today is what needs him; People is everyone and
+  // everything for testers (the invite, the practice run, the coupons); the
+  // two documents share one tab with a switch inside it.
+  var TABS = [{ id: 'home', name: 'Today' }, { id: 'people', name: 'People' }, { id: 'list', name: 'List' }, { id: 'builds', name: 'Builds' }, { id: 'coach', name: 'Coach' }, { id: 'cost', name: 'Costs & marketing' }];
+  var TAB_IDS = ['home', 'people', 'list', 'builds', 'coach', 'cost', 'marketing'];
   var DOC_TABS = { cost: 'Costs', marketing: 'Marketing' };
   var isDocTab = function (id) { return Object.prototype.hasOwnProperty.call(DOC_TABS, id); };
   function viewTabs() {
     return '<div class="pair tabs">' + TABS.map(function (t) {
-      return '<button class="btn small' + (S.tab === t.id ? ' on' : '') + '" data-act="tab" data-id="' + t.id + '">' + t.name + '</button>';
+      var on = S.tab === t.id || (t.id === 'cost' && isDocTab(S.tab));
+      return '<button class="btn small' + (on ? ' on' : '') + '" data-act="tab" data-id="' + t.id + '">' + t.name + tabCount(t.id) + '</button>';
+    }).join('') + '</div>';
+  }
+  // A number on a tab only when something there is waiting on him.
+  function tabCount(id) {
+    var n = 0, L = S.list || {};
+    if (id === 'home') {
+      n = alarmGroups((L.alarms || []).filter(function (a) { return !a.seen_at; })).length +
+        ((S.reports && S.reports.reports) || []).filter(function (x) { return !x.reviewed_at; }).length;
+    } else if (id === 'list') n = (L.followups || []).filter(function (f) { return daysUntil(f.check_on) <= 0; }).length;
+    return n ? ' · ' + n : '';
+  }
+  // Costs and Marketing, side by side inside their one tab.
+  function viewDocSwitch() {
+    return '<div class="pair">' + Object.keys(DOC_TABS).map(function (slug) {
+      return '<button class="btn small' + (S.tab === slug ? ' on' : '') + '" data-act="tab" data-id="' + slug + '">' + esc(DOC_TABS[slug]) + '</button>';
     }).join('') + '</div>';
   }
   function viewCoach() {
@@ -1299,7 +1351,7 @@
   }
   function viewBuilds() {
     var B = S.builds || {};
-    var head = '<h1 class="day">What is new to test</h1>' + viewPractice();
+    var head = '<h1 class="day">What is new to test</h1>';
     if (!B.data) return head + '<section class="card"><h2 class="card-title">Builds</h2><p class="fine center">' + esc(B.failed || 'Reading.') + '</p></section>';
     var builds = B.data.builds;
     if (!builds.length) {
@@ -1522,7 +1574,6 @@
       }).join('') + '</div>';
     }
     return '' +
-      viewToday() + viewReports() + viewMoney() + viewPeople() + viewInvite() + viewCoupons() +
       '<h1 class="day">The list <span>' + L.items.length + ' open · ' + L.followups.length + ' to chase' + (due ? ' · ' + due + ' due' : '') + '</span></h1>' +
       '<section class="card' + (due ? ' verdict' : '') + '"><h2 class="card-title">Follow-ups · ' + L.followups.length + '</h2>' +
         '<p class="fine center">Things to chase on a day. On that day it turns red here.</p>' +
@@ -1530,8 +1581,16 @@
         '<button class="btn wide" data-act="fadd">Add a follow-up</button>' + done + '</section>' +
       '<section class="card"><h2 class="card-title">Open items · ' + L.items.length + '</h2>' +
         '<p class="fine center">This is the real list. A change here is kept at once, and the sessions on the Mac read the same one and keep a copy, so leave people\u2019s names and numbers out of it.</p>' +
-        '<button class="btn amber wide" data-act="iadd">Add an item</button><div class="sugs">' + groups + '</div>' + gone + '</section>' +
-      '<button class="link" data-act="signout">Sign out</button>';
+        '<button class="btn amber wide" data-act="iadd">Add an item</button><div class="sugs">' + groups + '</div>' + gone + '</section>';
+  }
+  // TODAY: what needs him now. Alarms, reports from the team chats, the AI balance.
+  function viewHome() { return viewToday() + viewReports() + viewMoney(); }
+  // PEOPLE: what he hands a tester first, side by side (a practice number for
+  // going through the app as a new person, a coupon, the invite), then
+  // everyone. The tools stay at the top however long the list of people grows.
+  function viewPeopleTab() {
+    var testers = viewPractice() + viewCoupons() + viewInvite();
+    return (testers ? '<h1 class="day">For testers</h1>' + testers + '<h1 class="day">Everyone</h1>' : '') + viewPeople();
   }
 
   /* ---------- what a sheet holds ---------- */
@@ -1638,7 +1697,8 @@
     seen: function (a) {
       var al = (S.list.alarms || []).filter(function (x) { return x.id === a.id; })[0];
       if (!al) return null;
-      return { html: pop('Seen', alarmLine(al),
+      var n = alarmMates(al.id).length;
+      return { html: pop('Seen', alarmLine(al) + (n > 1 ? ' (all ' + n + ')' : ''),
         '<label class="field" for="snote"><span class="micro muted">What you did about it (optional)</span><textarea class="well" id="snote" maxlength="1000" placeholder="Kept with the alarm."></textarea></label>' +
         '<div class="pair">' + cancel + '<button class="btn amber" data-act="seengo" data-id="' + esc(a.id) + '">Seen</button></div>') };
     },
@@ -2064,7 +2124,8 @@
     else if (S.stage === 'offline') v.innerHTML = '<section class="card"><h1 class="card-title">No connection</h1><p class="fine center">The list could not be reached. Nothing is lost: it is kept in the database.</p><button class="btn wide" data-act="reload">Try again</button></section>';
     else if (S.stage === 'notowner') v.innerHTML = '<section class="card"><h1 class="card-title">Not the owner</h1><p class="fine center">This page opens only for the owner of CountAble. The account you signed in with is not it.</p><button class="btn wide" data-act="signoutgo">Sign out</button></section>';
     else if (S.stage === 'second') v.innerHTML = viewSecond();
-    else if (S.stage === 'list' && S.list) v.innerHTML = viewTabs() + (S.tab === 'coach' ? viewCoach() : isDocTab(S.tab) ? viewDoc(S.tab) : S.tab === 'builds' ? viewBuilds() : viewList());
+    else if (S.stage === 'list' && S.list) v.innerHTML = viewTabs() + (S.tab === 'coach' ? viewCoach() : isDocTab(S.tab) ? viewDocSwitch() + viewDoc(S.tab) : S.tab === 'builds' ? viewBuilds()
+      : S.tab === 'people' ? viewPeopleTab() : S.tab === 'list' ? viewList() : viewHome()) + '<button class="link" data-act="signout">Sign out</button>';
     else v.innerHTML = viewSignIn();
   }
 
@@ -2088,7 +2149,7 @@
         // So are the documents, while one of them is the tab showing.
         if (isDocTab(S.tab) && !(S.docs && S.docs.loading)) loadDocs();
         // And the builds, while theirs is the tab showing (a mark comes back this way).
-        if (S.tab === 'builds' && !(S.builds && S.builds.loading)) loadBuilds();
+        if ((S.tab === 'builds' || S.tab === 'people') && !(S.builds && S.builds.loading)) loadBuilds();
         // Typing that was kept across a sign-out comes back.
         if (S.pending) { var kept = S.pending; S.pending = null; stack.length = 0; stack.push(kept); drawSheet(); }
       } else if (r.status === 401) {
@@ -2471,10 +2532,10 @@
     // The tabs. The Coach tab's two reads, and the documents' one, are asked
     // for here, when the tab is opened.
     tab: function (d) {
-      S.tab = d.id === 'coach' || d.id === 'builds' || isDocTab(d.id) ? d.id : 'home';
+      S.tab = TAB_IDS.indexOf(d.id) >= 0 ? d.id : 'home';
       if (S.tab === 'coach' && !(S.coach && (S.coach.data || S.coach.loading))) loadCoach();
       else if (isDocTab(S.tab) && !(S.docs && (S.docs.data || S.docs.loading))) loadDocs();
-      else if (S.tab === 'builds' && !(S.builds && (S.builds.data || S.builds.loading))) loadBuilds();
+      else if ((S.tab === 'builds' || S.tab === 'people') && !(S.builds && (S.builds.data || S.builds.loading))) loadBuilds();
       else drawPage();
     },
     // A build folded open or shut, as a section of the list is.
@@ -2546,7 +2607,18 @@
 
     // An alarm, seen.
     seen: function (d) { openSheet('seen', { id: d.id }); },
-    seengo: function (d, el) { change(el, 'owner_alarm_mark_seen', { _event_id: d.id, _note: val('#snote').trim() || null }, 'Marked seen', closeAll); },
+    seengo: function (d, el) {
+      var ids = alarmMates(d.id), note = val('#snote').trim() || null;
+      if (ids.length <= 1) { change(el, 'owner_alarm_mark_seen', { _event_id: d.id, _note: note }, 'Marked seen', closeAll); return; }
+      // The rest of the group first, then the one named, through change() (its answer closes the sheet and reads again).
+      if (S.busy) return;
+      var rest = ids.filter(function (x) { return x !== d.id; }), mine = gen;
+      rest.reduce(function (p, id) {
+        return p.then(function () { return mine === gen ? rpc('owner_alarm_mark_seen', { _event_id: id, _note: note }) : null; });
+      }, Promise.resolve()).then(function () {
+        if (mine === gen) change(el, 'owner_alarm_mark_seen', { _event_id: d.id, _note: note }, 'Marked seen', closeAll);
+      });
+    },
     showseen: function () { S.showSeen = !S.showSeen; drawPage(); },
     // The health check, now. Its answer arrives as an alarm (or as nothing).
     check: function (d, el) {
