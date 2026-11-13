@@ -2276,7 +2276,9 @@
       S.busy = true; say(''); drawPage();
       var mine = gen;
       // create:false — this page signs an account in and never makes one.
-      post('/functions/v1/phone-signin-verify', { phone: S.phone, country: 'US', code: code, create: false }).then(function (r) {
+      // device: the code counts as this sign-in's phone half only when it is
+      // typed on the device that asked for it (Nov 12 2026, SEC-3).
+      post('/functions/v1/phone-signin-verify', { phone: S.phone, country: 'US', code: code, create: false, device: deviceId() }).then(function (r) {
         if (!(r.ok && r.data && r.data.ok && r.data.token_hash)) {
           S.busy = false;
           say(r.status === 0 ? 'No connection. Try again.' : (r.data && r.data.message) || 'That did not work. Try again.', 'warn');
