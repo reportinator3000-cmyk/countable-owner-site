@@ -99,6 +99,20 @@
 // as it is (owner_chat_message_hide, owner_chat_report_keep). A message the
 // safety screen held back is never hidden or brought back from here.
 //
+// THE REST OF THE REPORT QUEUE (owner, Nov 13 2026: "Yes, build the REPORTS
+// section on my page before the item 3 update runs."). The same read brings
+// the reports that are not team chat messages: a REPORT on a teammate in the
+// app, and a REPORT typed in a team's group text. They come with NO WORDS: a
+// teammate report has none, and a group-text report's note and messages are
+// not shown here, because the privacy policy does not say yet that the
+// operator reads them. Each one is marked REVIEWED, KEPT or ACTION TAKEN with
+// a note of what he did (owner_member_report_keep: on the record, never the
+// note), and the page sends when it read the list, so a report marked
+// somewhere else meanwhile is never marked over. A report that has waited
+// more than a day stands out: the Terms promise a review within 24 hours. To
+// stop someone using the app, the report opens their row on People, where
+// the pause is; this page has no other power over anyone's account.
+//
 // THE BUILDS TAB (owner, Oct 18 2026: "every time a testflight is launched, I
 // get a list of every new feature to test on my dashboard"). For every
 // TestFlight build, one plain sentence per thing that is new since the build
@@ -160,11 +174,17 @@
     if (d < 14) return 'about ' + Math.round(d) + ' days';
     return 'about ' + Math.round(d / 7) + ' weeks';
   };
+  // A moment, the way a person says it: "Today 3:04 PM", "Yesterday 9:10 AM",
+  // "Nov 3 8:00 PM" (Nov 13 2026, the page made friendlier).
   var when = function (iso) {
-    var d = new Date(iso), n = new Date();
-    var same = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
-    return (same ? 'Today' : day(d)) + ' ' + clock(d);
+    // Yesterday is the calendar day before, never "24 hours ago" (a clock
+    // change would make that wrong for an hour).
+    var d = new Date(iso), n = new Date(), y = new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1, 12);
+    var sameDay = function (a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); };
+    return (sameDay(d, n) ? 'Today' : sameDay(d, y) ? 'Yesterday' : day(d)) + ' ' + clock(d);
   };
+  // "in 3 days", "1 day late": a count of days in words, never "3 d".
+  var daysWord = function (n) { return n === 1 ? '1 day' : n + ' days'; };
   var reduced = function () { return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); };
   var randomHex = function (n) {
     var bytes = new Uint8Array(n);
@@ -270,7 +290,13 @@
     });
   }
   // One of the list's database functions.
-  function rpc(name, args) { return authed('/rest/v1/rpc/' + name, args); }
+  // How many calls are in the air: a Needs-you tap follows its place until
+  // every one that was out has landed (aimAgain).
+  var callsOut = 0;
+  function rpc(name, args) {
+    callsOut++;
+    return authed('/rest/v1/rpc/' + name, args).then(function (r) { callsOut = Math.max(0, callsOut - 1); return r; });
+  }
   // The second step: 'start' emails the code, 'verify' checks it.
   function second(action, code) { return authed('/functions/v1/owner-second-step', { action: action, code: code || null, device: deviceId() }); }
   var NOT_OWNER = function (r) { return r.status === 403 || !!(r.data && r.data.code === '42501'); };
@@ -284,7 +310,7 @@
     if (NOT_OWNER(r)) return 'This account is not the owner.';
     // 22023 is the list's own refusal, written as a sentence for this page.
     if (r.data && r.data.code === '22023' && r.data.message) return String(r.data.message);
-    return typed ? 'That did not go through. Your text is still here.' : 'That did not go through. Nothing was changed.';
+    return typed ? 'That did not go through. Your text is still here: try Save again in a moment.' : 'That did not go through. Nothing was changed: try again in a moment.';
   }
 
   /* ---------- what the page knows ---------- */
@@ -319,9 +345,10 @@
     if (S.stage === 'code') {
       return '<section class="card"><h1 class="card-title">Enter the code</h1>' +
         '<p class="fine center">Six digits, texted to your number. It is good for ten minutes.</p>' +
-        '<label class="field" for="code"><span class="micro muted">The code</span>' +
+        '<label class="field" for="code"><span class="micro muted">The code from the text</span>' +
         '<input class="well code" id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"></label>' + note +
         '<button class="btn amber wide" data-act="verify"' + (S.busy ? ' disabled' : '') + '>' + (S.busy ? 'Signing in' : 'Sign in') + '</button>' +
+        '<p class="fine center">No text after a minute? Tap Use a different number, type your number again with care, and ask again. One number gets six codes a day at most, the app’s included.</p>' +
         '<button class="link" data-act="again">Use a different number</button></section>';
     }
     return '<section class="card"><h1 class="card-title">Owner sign-in</h1>' +
@@ -345,6 +372,7 @@
     }
     return '<section class="card"><h1 class="card-title">One more step</h1>' +
       '<p class="fine center">This device is new here, so it needs your email as well as your phone. A six-digit code was sent to your email address. It is good for ten minutes. After this, this device needs only the texted code.</p>' +
+      '<p class="fine center">Not in your inbox after a minute? Look in the junk folder, then tap Send it again.</p>' +
       '<label class="field" for="scode"><span class="micro muted">The code from the email</span>' +
       '<input class="well code" id="scode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"></label>' + note +
       '<button class="btn amber wide" data-act="secondgo"' + (S.busy ? ' disabled' : '') + '>' + (S.busy ? 'Checking' : 'Open the page') + '</button>' +
@@ -362,7 +390,7 @@
     too_many_tries: 'Too many tries on that code. Tap Send it again.'
   };
   function secondSays(r) {
-    if (r.status === 0) return 'No connection. Try again.';
+    if (r.status === 0) return 'No connection. Check your signal or Wi-Fi, then try again.';
     return SECOND_WORDS[r.data && r.data.error] || 'That did not work. Try again in a moment.';
   }
   // This sign-in's time is up (or its trust was ended somewhere else). The
@@ -397,13 +425,13 @@
   // in an open sheet is kept by whoever called this (S.pending).
   function needSecond() {
     var first = S.stage !== 'second';
-    S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); forgetBuilds(); S.stage = 'second'; S.busy = false;
+    S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); forgetBuilds(); forgetFinds(); S.stage = 'second'; S.busy = false;
     stack.length = 0; drawSheet();
     if (first) { S.codeSent = false; say(''); drawPage(); secondStart(); } else drawPage();
   }
   // The session is over. Anything being typed is kept and comes back after signing in.
   function signedOut(text) {
-    keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); forgetBuilds(); S.stage = 'signin'; S.busy = false;
+    keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); forgetBuilds(); forgetFinds(); S.stage = 'signin'; S.busy = false;
     say(text || 'You are signed out. Sign in again.', 'warn');
     stack.length = 0; drawSheet(); drawPage();
   }
@@ -411,9 +439,12 @@
   /* ---------- the list ---------- */
   function dueChip(iso) {
     var d = daysUntil(iso);
-    if (d < 0) return '<span class="chip bad num">Overdue ' + (-d) + ' d</span>';
+    if (d < 0) return '<span class="chip bad num">' + daysWord(-d) + ' late</span>';
     if (d === 0) return '<span class="chip bad">Due today</span>';
-    return '<span class="chip num' + (d <= 2 ? ' warn' : '') + '">' + day(fromIso(iso)) + ' · ' + d + ' d</span>';
+    if (d === 1) return '<span class="chip warn">Tomorrow</span>';
+    // Short, so the follow-up's own words keep their room: "In 3 days" this
+    // week, the date ("Nov 25") after that.
+    return '<span class="chip num' + (d <= 2 ? ' warn' : '') + '">' + (d <= 6 ? 'In ' + daysWord(d) : day(fromIso(iso))) + '</span>';
   }
   // What each alarm is, in the words of the email that announced it.
   var ALARMS = {
@@ -425,7 +456,8 @@
     report: 'The twice-daily report is not landing',
     coaching_credit: 'Your coaching credit is low',
     spend_tripwire: 'Today\u2019s spend passed your tripwire',
-    inbound_flood: 'Texts flooded in to the coach\u2019s number'
+    inbound_flood: 'Texts flooded in to the coach\u2019s number',
+    reports_waiting: 'A report has waited more than 12 hours'
   };
   // His own coaching credit is told at three marks, and the alarm carries
   // which one (owner, Oct 13 2026: "yes add the warning"; owner_alerts.ts).
@@ -586,24 +618,48 @@
   function textsWord(p) { return p.paused_at ? 'Off: account paused' : p.texts_paused ? 'On hold' : (SMS_WORDS[p.sms_status] || text(p.sms_status) || 'Not known'); }
   function personName(p) { return (p.name || 'No name yet') + (p.you ? ' (you)' : ''); }
 
+  // A list this long or longer gets a box to narrow it (people, open items).
+  var FIND_AT = 8;
+  // What the find box holds: memory only, never stored, gone at sign-out.
+  S.pfind = ''; S.ifind = '';
+  var lastPeople = null;
+  function forgetFinds() { S.pfind = ''; S.ifind = ''; lastPeople = null; }
+  var matches = function (words, typed) {
+    var want = text(typed).trim().toLowerCase();
+    return !want || want.split(/\s+/).every(function (w) { return words.toLowerCase().indexOf(w) >= 0; });
+  };
+  function peopleFound(rows, row) {
+    var hit = rows.filter(function (x) { return matches(personName(x.p) + ' ' + STATUS_WORDS[x.s] + ' ' + (TIERS[x.p.tier] || ''), S.pfind); });
+    return hit.length ? '<div class="list">' + hit.map(row).join('') + '</div>' : '<p class="fine center">Nobody matches that.</p>';
+  }
+  // A card kept in place while its read is on its way, so the page does not
+  // jump when the answer lands.
+  function waitCard(words) { return '<section class="card wait" aria-busy="true"><p class="fine center">' + esc(words) + '</p></section>'; }
+
   // Read after the list, and never in its way: if this read fails the page
   // still shows the list, and says the people could not be read.
   var peopleTurn = 0;
   function loadPeople() {
     var mine = gen, turn = ++peopleTurn;
-    rpc('owner_people_read', {}).then(function (r) {
+    return rpc('owner_people_read', {}).then(function (r) {
       if (mine !== gen || turn !== peopleTurn) return;      // signed out, or a newer read is in the air
-      if (r.ok && r.data && r.data.people) S.people = r.data;
+      if (r.ok && r.data && r.data.people) { S.people = r.data; S.people.readAt = new Date(); }
       else if (!S.people) S.people = { failed: true, missing: r.status === 404 };
+      // A re-read refused after a good one: the people stay, marked STALE
+      // until the next good read, and every place that shows them says so.
+      else if (S.people.people) S.people.stale = true;
       if (S.stage === 'list') drawPage();
       // The coupons are read after the people (they name them), and only when there are people.
       if (S.people && S.people.people) loadCoupons();
+      return couponsRead;
     });
   }
   function viewPeople() {
     var P = S.people;
-    if (!P || P.missing) return '';
-    if (P.failed) return '<section class="card"><h2 class="card-title">People</h2><p class="fine center">The people could not be read just now. The list below is not affected.</p></section>';
+    // Still being read: the room is kept, so nothing jumps when they arrive.
+    if (!P) return waitCard('Reading the people.');
+    if (P.missing) return '';
+    if (P.failed) return '<section class="card"><h2 class="card-title">People</h2><p class="fine center">The people could not be read just now. Nothing else is affected: tap Refresh at the top to try again.</p></section>';
     var today = text(P.today), counts = {};
     var rows = P.people.map(function (p, i) { return { p: p, s: personStatus(p, today), i: i }; });
     rows.sort(function (a, b) { return (ORDER.indexOf(a.s) - ORDER.indexOf(b.s)) || (a.i - b.i); });
@@ -621,14 +677,22 @@
         '<span class="chip' + (q.tier === 'premium' ? ' gold' : '') + '">' + esc(TIERS[q.tier] || text(q.tier)) + '</span><i class="chev"></i></button>';
     };
     var list = rows.map(row).join('');
+    lastPeople = { rows: rows, row: row };
     var fold = '';
     if (paused.length) {
       fold = '<button class="link" data-act="ppast">' + (S.showPaused ? 'Hide paused' : 'Paused · ' + paused.length) + '</button>';
       if (S.showPaused) fold += '<div class="list">' + paused.map(row).join('') + '</div>';
     }
+    // A LONG LIST CAN BE NARROWED (Nov 13 2026): a name or a word like
+    // "slipping", matched on what is already on the page. Nothing is asked
+    // of the database and nothing is kept: the words go with the page.
+    var shown = list ? '<div class="list">' + list + '</div>' : '<p class="fine center">' + (paused.length ? 'Everyone is paused.' : 'Nobody has an account yet.') + '</p>';
+    if (rows.length >= FIND_AT) {
+      shown = '<label class="field" for="pfind"><span class="micro muted">Find a person</span><input class="well" id="pfind" type="search" autocomplete="off" placeholder="A name, or a word like slipping" value="' + esc(S.pfind) + '"></label>' +
+        '<div id="plist">' + peopleFound(rows, row) + '</div>';
+    }
     return '<section class="card"><h2 class="card-title">People · ' + rows.length + '</h2>' +
-      (tally ? '<div class="chips mid">' + tally + '</div>' : '') +
-      (list ? '<div class="list">' + list + '</div>' : '<p class="fine center">' + (paused.length ? 'Everyone is paused.' : 'Nobody has an account yet.') + '</p>') + fold +
+      (tally ? '<div class="chips mid">' + tally + '</div>' : '') + (P.stale ? staleLine('people', P.readAt) : '') + shown + fold +
       '<p class="fine center">Real people only: the accounts made for the films and for Apple’s review are left out. A person’s texts open only when you ask for them.</p></section>';
   }
   // ONE PERSON'S TEXTS WITH THE COACH, asked for by a tap and never before.
@@ -687,6 +751,8 @@
   var COUPON_WORDS = { unused: 'Unused', used: 'Used', ended: 'Ended', cancelled: 'Cancelled' };
   var dollars = function (cents) { var n = (Number(cents) || 0) / 100; return '$' + (n === Math.round(n) ? String(n) : n.toFixed(2)); };
   var couponsTurn = 0, cshowTurn = 0;
+  // The coupons' read in the air, so Refresh can wait for it with the people's.
+  var couponsRead = Promise.resolve();
   // Memory only, never stored: the coupons (no codes), ONE coupon's code while
   // its sheet is open, and whether the used and ended ones are unfolded.
   S.coupons = null; S.cshow = null; S.showCoupons = false;
@@ -695,14 +761,16 @@
   function forgetCoupon() { cshowTurn++; S.cshow = null; }
   function loadCoupons() {
     var mine = gen, turn = ++couponsTurn;
-    rpc('owner_coupons_read', {}).then(function (r) {
+    couponsRead = rpc('owner_coupons_read', {}).then(function (r) {
       if (mine !== gen || turn !== couponsTurn) return;     // signed out, or a newer read is in the air
-      if (r.ok && r.data && r.data.coupons && r.data.rules) S.coupons = r.data;
+      if (r.ok && r.data && r.data.coupons && r.data.rules) { S.coupons = r.data; S.coupons.readAt = new Date(); }
       else if (!S.coupons) S.coupons = { failed: true, missing: r.ok || r.status === 404 };
+      else if (S.coupons.coupons) S.coupons.stale = true;    // kept, and marked, until the next good read
       if (S.stage === 'list') drawPage();
       // An open coupon is drawn again from what is now true (sent, used, cancelled).
       if (stack.length && stack[stack.length - 1].kind === 'coupon') drawSheet();
     });
+    return couponsRead;
   }
   function couponWhy(r) {
     if (r.status === 0) return 'No answer came back. Try again.';
@@ -765,8 +833,9 @@
   }
   function viewCoupons() {
     var C = S.coupons;
+    if (!C && S.people && S.people.people) return waitCard('Reading the coupons.');
     if (!C || C.missing || !(S.people && S.people.people)) return '';
-    if (C.failed) return '<section class="card"><h2 class="card-title">Coupons</h2><p class="fine center">The coupons could not be read just now. Nothing else is affected.</p></section>';
+    if (C.failed) return '<section class="card"><h2 class="card-title">Coupons</h2><p class="fine center">The coupons could not be read just now. Nothing else is affected. Tap Refresh at the top to try again.</p></section>';
     var R = C.rules, sum = function (list) { return list.reduce(function (n, c) { return n + (Number(c.cents) || 0); }, 0); };
     var open = C.coupons.filter(function (c) { return c.state === 'unused'; });
     var used = C.coupons.filter(function (c) { return c.state === 'used'; });
@@ -781,7 +850,7 @@
       if (S.showCoupons) older += '<div class="list">' + past.map(couponRow).join('') + '</div>';
     }
     return '<section class="card"><h2 class="card-title">Coupons · ' + open.length + ' unused</h2>' +
-      '<div class="chips mid">' + chips + '</div>' +
+      '<div class="chips mid">' + chips + '</div>' + (C.stale ? staleLine('coupons', C.readAt) : '') +
       '<p class="fine center">AI credit a tester adds in the app under ' + esc(COUPON_WHERE) + '. You send it from your own Messages.</p>' +
       (open.length ? '<div class="list">' + open.map(couponRow).join('') + '</div>' : '<p class="fine center">No unused coupons.</p>') +
       '<button class="btn amber wide" data-act="cmake">Make a coupon</button>' +
@@ -839,13 +908,15 @@
   function forgetReports() { reportsTurn++; S.reports = null; forgetReport(); }
   function loadReports() {
     var mine = gen, turn = ++reportsTurn;
-    rpc('owner_chat_reports_read', {}).then(function (r) {
+    return rpc('owner_chat_reports_read', {}).then(function (r) {
       if (mine !== gen || turn !== reportsTurn) return;     // signed out, or a newer read is in the air
-      if (r.ok && r.data && Array.isArray(r.data.reports)) S.reports = r.data;
+      if (r.ok && r.data && Array.isArray(r.data.reports)) { S.reports = r.data; S.reports.readAt = new Date(); }
       else if (!S.reports) S.reports = { failed: true, missing: r.ok || r.status === 404 };
+      else if (Array.isArray(S.reports.reports)) S.reports.stale = true;   // kept, and marked, until the next good read
       if (S.stage === 'list') drawPage();
-      // An open report is drawn again from what is now true.
-      if (stack.length && stack[stack.length - 1].kind === 'report') drawSheet();
+      // An open report is drawn again from what is now true (a note being
+      // typed lives on the sheet's entry, so it is drawn again too).
+      if (stack.length && (stack[stack.length - 1].kind === 'report' || stack[stack.length - 1].kind === 'mreport')) drawSheet();
     });
   }
   function reportWhy(r) {
@@ -870,27 +941,77 @@
     });
   }
   function reportOf(id) { var R = S.reports; return R && R.reports ? R.reports.filter(function (x) { return x.id === id; })[0] || null : null; }
+  // OVER A DAY: an open report that has waited more than 24 hours (the Terms
+  // promise every report is reviewed within 24 hours; App Store rule 1.2).
+  var DAY_MS = 86400000;
+  var overDay = function (x) { return !x.reviewed_at && Date.now() - new Date(x.at).getTime() > DAY_MS; };
+  var lateChip = function (x) { return overDay(x) ? '<span class="chip bad">Over a day</span>' : ''; };
   function reportRow(x) {
     return '<button class="row" data-act="report" data-id="' + esc(x.id) + '"><span class="grow"><b>' + esc(reasonWord(x.reason)) + ' · ' + esc(x.about) + '</b>' +
       '<small>' + esc(text(x.team) + ' · reported by ' + text(x.by) + ' · ' + when(x.at)) + '</small></span>' +
-      '<span class="chip' + (x.state === 'hidden' ? ' on' : x.state === 'shown' && !x.reviewed_at ? ' warn' : '') + '">' + esc(REPORT_CHIPS[x.state] || text(x.state)) + '</span><i class="chev"></i></button>';
+      '<span class="chip' + (x.state === 'hidden' ? ' on' : x.state === 'shown' && !x.reviewed_at ? ' warn' : '') + '">' + esc(REPORT_CHIPS[x.state] || text(x.state)) + '</span>' + lateChip(x) + '<i class="chev"></i></button>';
+  }
+  // THE REST OF THE QUEUE (owner, Nov 13 2026). No word of any of these comes
+  // to this page: the list says who, why, where and when, and what he did.
+  var MEMBER_KINDS = { teammate: 'Teammate', group_text: 'Group text', chat: 'Team chat' };
+  var OUTCOMES = { reviewed: 'Reviewed: nothing to do', kept: 'Kept: it can stay', acted: 'Action taken' };
+  var OUTCOME_CHIPS = { reviewed: 'Reviewed', kept: 'Kept', acted: 'Acted' };
+  var MARKED = { reviewed: 'Marked reviewed', kept: 'Marked kept', acted: 'Marked: action taken' };
+  var waited = function (iso) {
+    var h = Math.floor((Date.now() - new Date(iso).getTime()) / 3600000);
+    return h < 1 ? 'Under an hour' : h < 48 ? h + (h === 1 ? ' hour' : ' hours') : Math.floor(h / 24) + ' days';
+  };
+  var members = function () { var R = S.reports; return R && Array.isArray(R.members) ? R.members : null; };
+  function mreportOf(id) { return (members() || []).filter(function (x) { return x.id === id; })[0] || null; }
+  function mreportRow(x) {
+    return '<button class="row" data-act="mreport" data-id="' + esc(x.id) + '"><span class="grow"><b>' + esc(reasonWord(x.reason)) + ' · ' + esc(x.about) + '</b>' +
+      '<small>' + esc((MEMBER_KINDS[x.kind] || 'Report') + ' · ' + text(x.team) + ' · reported by ' + text(x.by) + ' · ' + when(x.at)) + '</small></span>' +
+      // A late open report shows OVER A DAY alone (owner, Nov 13 2026: "Yes, drop it").
+      (overDay(x) ? '' : '<span class="chip' + (x.reviewed_at ? '' : ' warn') + '">' + esc(x.reviewed_at ? OUTCOME_CHIPS[x.outcome] || 'Reviewed' : 'Open') + '</span>') + lateChip(x) + '<i class="chev"></i></button>';
+  }
+  // How many reports wait on him, and how many of them for more than a day:
+  // the database's own counts of the whole queue when it sends them, never
+  // fewer than the rows drawn here.
+  function reportsWaiting() {
+    var R = S.reports;
+    if (!R || !Array.isArray(R.reports)) return { open: 0, late: 0 };
+    var rows = R.reports.concat(members() || []).filter(function (x) { return !x.reviewed_at; });
+    var c = R.counts || {};
+    return { open: Math.max(Number(c.open) || 0, rows.length), late: Math.max(Number(c.over_day) || 0, rows.filter(overDay).length) };
   }
   function viewReports() {
     var R = S.reports;
-    if (!R || R.missing) return '';
-    if (R.failed) return '<section class="card"><h2 class="card-title">Reports</h2><p class="fine center">The reports could not be read just now. Nothing else is affected.</p></section>';
+    if (!R) return waitCard('Reading the reports.');
+    if (R.missing) return '';
+    if (R.failed) return '<section class="card"><h2 class="card-title">Reports</h2><p class="fine center">The reports could not be read just now. Nothing else is affected. Tap Refresh at the top to try again.</p></section>';
+    var M = members();
     var open = R.reports.filter(function (x) { return !x.reviewed_at; });
     var done = R.reports.filter(function (x) { return x.reviewed_at; });
-    var older = '';
-    if (done.length) {
-      older = '<button class="link" data-act="rpast">' + (S.showReviewed ? 'Hide reviewed' : 'Reviewed · ' + done.length) + '</button>';
-      if (S.showReviewed) older += '<div class="list">' + done.map(reportRow).join('') + '</div>';
+    var mopen = (M || []).filter(function (x) { return !x.reviewed_at; });
+    var mdone = (M || []).filter(function (x) { return x.reviewed_at; });
+    var w = reportsWaiting(), n = w.open;
+    var older = '', past = done.map(function (x) { return { at: x.at, html: reportRow(x) }; })
+      .concat(mdone.map(function (x) { return { at: x.at, html: mreportRow(x) }; }))
+      .sort(function (a, b) { return a.at < b.at ? 1 : a.at > b.at ? -1 : 0; });
+    if (past.length) {
+      older = '<button class="link" data-act="rpast">' + (S.showReviewed ? 'Hide reviewed' : 'Reviewed · ' + past.length) + '</button>';
+      if (S.showReviewed) older += '<div class="list">' + past.map(function (x) { return x.html; }).join('') + '</div>';
     }
-    return '<section class="card' + (open.length ? ' verdict' : '') + '"><h2 class="card-title">Reports' + (open.length ? ' · ' + open.length + ' open' : '') + '</h2>' +
+    // The rest of the queue: before this update the read does not send it,
+    // and those reports are still in the app (DATA > METRICS).
+    var rest = !M
+      ? '<p class="fine center">Reports on a teammate or in a group text are in the app (DATA, METRICS) until the next update.</p>'
+      : mopen.length
+        ? '<div class="list">' + mopen.map(mreportRow).join('') + '</div>' +
+          '<p class="fine center">Reports on a teammate or in a group text. Open one to see who and why, then mark what you did. Each marking is recorded.</p>'
+        : '<p class="fine center">No reports on a teammate or in a group text.</p>';
+    return '<section class="card' + (w.late ? ' late' : n ? ' verdict' : '') + '"><h2 class="card-title">Reports' + (n ? ' · ' + n + ' open' : '') + '</h2>' +
+      (n ? '<p class="stat">' + (n === 1 ? '1 report to look at' : n + ' reports to look at') + '</p>' : '') +
+      (w.late ? '<p class="msg-line bad" role="alert">' + esc(w.late === 1 ? '1 has waited more than a day.' : w.late + ' have waited more than a day.') + ' Every report is to be looked at within a day.</p>' : '') + (R.stale ? staleLine('reports', R.readAt) : '') +
       (open.length
-        ? '<p class="stat">' + (open.length === 1 ? '1 report to look at' : open.length + ' reports to look at') + '</p><div class="list">' + open.map(reportRow).join('') + '</div>' +
+        ? '<div class="list">' + open.map(reportRow).join('') + '</div>' +
           '<p class="fine center">Messages someone reported in a team chat. Open one to read it, then hide it for everyone or keep it. Each opening is recorded.</p>'
-        : '<p class="fine center">Nothing reported in the team chats.</p>') + older + '</section>';
+        : '<p class="fine center">Nothing reported in the team chats.</p>') + rest + older + '</section>';
   }
 
   /* ---------- the coach ---------- */
@@ -953,7 +1074,7 @@
     var had = S.coach || {};
     S.coach = { loading: true, data: had.data || null, sheet: had.sheet || null, sheetState: had.sheetState || '' };
     if (S.stage === 'list') drawPage();
-    rpc('owner_coach_read', { _user: S.coachWho || null, _days: S.coachDays }).then(function (r) {
+    var ran = rpc('owner_coach_read', { _user: S.coachWho || null, _days: S.coachDays }).then(function (r) {
       if (mine !== gen || turn !== coachTurn || !S.coach) return;
       if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
       if (SECOND(r)) { needSecond(); return; }
@@ -964,13 +1085,13 @@
     });
     // The sheet is asked for once, and again only when he taps Refresh: the
     // one already here stays on screen until the new one arrives.
-    if (S.coach.sheet && !had.stale) return;
-    authed('/functions/v1/owner-coach', {}).then(function (r) {
+    if (S.coach.sheet && !had.stale) return ran;
+    return Promise.all([ran, authed('/functions/v1/owner-coach', {}).then(function (r) {
       if (mine !== gen || !S.coach) return;
       if (r.ok && r.data && r.data.sheet && r.data.sheet.jobs) { S.coach.sheet = r.data.sheet; S.coach.sheetState = ''; }
       else if (!S.coach.sheet) S.coach.sheetState = r.status === 404 ? 'missing' : 'failed';
       if (S.stage === 'list') { drawPage(); if (stack.length) drawSheet(); }
-    });
+    })]);
   }
   function forgetCoachTab() { coachTurn++; S.coach = null; S.coachWho = null; }
 
@@ -1027,8 +1148,7 @@
   function tabCount(id) {
     var n = 0, L = S.list || {};
     if (id === 'home') {
-      n = alarmGroups((L.alarms || []).filter(function (a) { return !a.seen_at; })).length +
-        ((S.reports && S.reports.reports) || []).filter(function (x) { return !x.reviewed_at; }).length;
+      n = alarmGroups((L.alarms || []).filter(function (a) { return !a.seen_at; })).length + reportsWaiting().open;
     } else if (id === 'list') n = (L.followups || []).filter(function (f) { return daysUntil(f.check_on) <= 0; }).length;
     return n ? ' · ' + n : '';
   }
@@ -1238,7 +1358,7 @@
     var mine = gen, turn = ++docsTurn;
     S.docs = { loading: true, data: S.docs ? S.docs.data : null };
     if (S.stage === 'list') drawPage();
-    rpc('owner_docs_read', {}).then(function (r) {
+    return rpc('owner_docs_read', {}).then(function (r) {
       if (mine !== gen || turn !== docsTurn || !S.docs) return;
       if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
       if (SECOND(r)) { needSecond(); return; }
@@ -1275,8 +1395,8 @@
     var mine = gen, turn = ++buildsTurn;
     S.builds = { loading: true, data: S.builds ? S.builds.data : null, practice: S.builds ? S.builds.practice : null };
     if (S.stage === 'list') drawPage();
-    loadPractice();
-    rpc('owner_builds_read', {}).then(function (r) {
+    var practiced = loadPractice();
+    return Promise.all([practiced, rpc('owner_builds_read', {}).then(function (r) {
       if (mine !== gen || turn !== buildsTurn || !S.builds) return;
       if (r.status === 401) { signedOut('You are signed out. Sign in again.'); return; }
       if (SECOND(r)) { needSecond(); return; }
@@ -1285,7 +1405,7 @@
       else S.builds.failed = r.status === 404 ? 'This is not switched on yet.' : r.status === 0 ? 'No answer came back. Tap Refresh.'
         : NOT_OWNER(r) ? 'This account is not the owner.' : 'The builds could not be read just now.';
       if (S.stage === 'list') drawPage();
-    });
+    })]);
   }
   // THE PRACTICE RUN (owner, Oct 22 2026: "build the practice sign-in started
   // from my dashboard"). The run waiting now (a made-up number, good for
@@ -1294,7 +1414,7 @@
   // number belongs to nobody; the code it asks for is texted to his phone.
   function loadPractice() {
     var mine = gen, turn = ++practiceTurn;
-    rpc('owner_practice_read', {}).then(function (r) {
+    return rpc('owner_practice_read', {}).then(function (r) {
       if (mine !== gen || turn !== practiceTurn || !S.builds) return;
       if (r.status === 401 || SECOND(r)) return;          // the builds' own read says so
       S.builds.practice = r.ok && r.data ? r.data : S.builds.practice;
@@ -1537,6 +1657,31 @@
     return out.join('');
   }
 
+  // One open item. Its number leads its small line (#34), the way the
+  // sessions and the commits name it.
+  function itemRow(it) {
+    var said = it.decision ? 'You said ' + text(it.decision) + (it.decision_note ? ': ' + text(it.decision_note) : '') : '';
+    var sub = [it.ref_no != null ? '#' + text(it.ref_no) : '', said].filter(Boolean).join(' · ');
+    return '<button class="row" data-act="iedit" data-id="' + esc(it.id) + '"><span class="grow"><span>' + esc(it.body) + '</span>' +
+      (sub ? '<small>' + esc(sub) + '</small>' : '') + '</span>' +
+      (it.decision ? '<span class="chip on">' + esc(it.decision) + '</span>' : '') + '<i class="chev"></i></button>';
+  }
+  // The sections of the list, each folded open or shut as he left it.
+  function itemGroups() {
+    var L = S.list;
+    return L.sections.map(function (s) {
+      var its = L.items.filter(function (it) { return it.section === s.key; }), open = !!S.sec[s.key];
+      var rows = its.length ? its.map(itemRow).join('') : '<p class="fine">Nothing open here.</p>';
+      return '<div class="grp' + (open ? ' open' : '') + '"><button class="grp-head" data-act="sec" data-id="' + esc(s.key) + '" aria-expanded="' + open + '"><span class="rank">' + esc(s.key) + '</span><span class="grow"><span class="ttl">' + esc(s.title) + '</span></span><span class="chip num">' + its.length + '</span></button>' +
+        '<div class="sug-body"><div><div class="list grp-in">' + rows + '</div></div></div></div>';
+    }).join('');
+  }
+  // The open items that match the find box, across every section.
+  function itemsFound() {
+    var L = S.list;
+    var hit = L.items.filter(function (it) { return matches((it.ref_no != null ? '#' + it.ref_no + ' ' : '') + text(it.body) + ' ' + text(it.decision), S.ifind); });
+    return hit.length ? '<div class="list">' + hit.map(itemRow).join('') + '</div>' : '<p class="fine center">No open item matches that.</p>';
+  }
   function viewList() {
     var L = S.list;
     var due = L.followups.filter(function (f) { return daysUntil(f.check_on) <= 0; }).length;
@@ -1556,16 +1701,7 @@
         return '<div class="row"><span class="grow"><b>' + esc(f.title) + '</b><small>Done ' + day(new Date(f.done_at)) + '</small></span><button class="btn small" data-act="fundone" data-id="' + esc(f.id) + '">Bring back</button></div>';
       }).join('') + '</div>';
     }
-    var groups = L.sections.map(function (s) {
-      var its = L.items.filter(function (it) { return it.section === s.key; }), open = !!S.sec[s.key];
-      var rows = its.length ? its.map(function (it) {
-        return '<button class="row" data-act="iedit" data-id="' + esc(it.id) + '"><span class="grow"><span>' + esc(it.body) + '</span>' +
-          (it.decision ? '<small>You said ' + esc(it.decision) + (it.decision_note ? ': ' + esc(it.decision_note) : '') + '</small>' : '') + '</span>' +
-          (it.decision ? '<span class="chip on">' + esc(it.decision) + '</span>' : '') + '<i class="chev"></i></button>';
-      }).join('') : '<p class="fine">Nothing open here.</p>';
-      return '<div class="grp' + (open ? ' open' : '') + '"><button class="grp-head" data-act="sec" data-id="' + esc(s.key) + '" aria-expanded="' + open + '"><span class="rank">' + esc(s.key) + '</span><span class="grow"><span class="ttl">' + esc(s.title) + '</span></span><span class="chip num">' + its.length + '</span></button>' +
-        '<div class="sug-body"><div><div class="list grp-in">' + rows + '</div></div></div></div>';
-    }).join('');
+    var groups = itemGroups();
     var gone = '';
     if (L.removed.length) {
       gone = '<button class="link" data-act="ishowgone">' + (S.showGone ? 'Hide removed' : 'Removed · ' + L.removed.length) + '</button>';
@@ -1574,23 +1710,100 @@
       }).join('') + '</div>';
     }
     return '' +
-      '<h1 class="day">The list <span>' + L.items.length + ' open · ' + L.followups.length + ' to chase' + (due ? ' · ' + due + ' due' : '') + '</span></h1>' +
+      '<h1 class="day">The list <span>' + L.items.length + ' open · ' + L.followups.length + ' to chase' + (due ? ' · ' + due + ' due' : '') + '</span></h1>' + anchor('follow') +
       '<section class="card' + (due ? ' verdict' : '') + '"><h2 class="card-title">Follow-ups · ' + L.followups.length + '</h2>' +
         '<p class="fine center">Things to chase on a day. On that day it turns red here.</p>' +
         (follow ? '<ol class="sugs">' + follow + '</ol>' : '<p class="fine center">Nothing to chase.</p>') +
         '<button class="btn wide" data-act="fadd">Add a follow-up</button>' + done + '</section>' +
       '<section class="card"><h2 class="card-title">Open items · ' + L.items.length + '</h2>' +
         '<p class="fine center">This is the real list. A change here is kept at once, and the sessions on the Mac read the same one and keep a copy, so leave people\u2019s names and numbers out of it.</p>' +
-        '<button class="btn amber wide" data-act="iadd">Add an item</button><div class="sugs">' + groups + '</div>' + gone + '</section>';
+        '<button class="btn amber wide" data-act="iadd">Add an item</button>' +
+        (L.items.length >= FIND_AT
+          // A long list can be narrowed: a number (#34) or a few words, matched
+          // on what the page already holds. Empty, the sections are back.
+          ? '<label class="field" for="ifind"><span class="micro muted">Find an item</span><input class="well" id="ifind" type="search" autocomplete="off" placeholder="A number like 34, or a word" value="' + esc(S.ifind) + '"></label>' +
+            '<div id="ifound">' + (text(S.ifind).trim() ? itemsFound() : '<div class="sugs">' + groups + '</div>') + '</div>'
+          : '<div class="sugs">' + groups + '</div>') + gone + '</section>';
   }
+  // NEEDS YOU (Nov 13 2026, the page made friendlier: "use your discretions to
+  // generally make my page better organized and more user friendly"). The
+  // first thing on Today answers "what needs me": one line per thing, each a
+  // tap to its place. It is drawn ONLY from what the page has already read
+  // (the list, the people, the reports, and the builds once their tab has
+  // been opened): it asks the database for nothing of its own, and it names
+  // no one and quotes nothing, only how many.
+  function needsLines() {
+    var L = S.list || {}, out = [];
+    var add = function (tone, words, tab, to) { out.push({ tone: tone, words: words, tab: tab, to: to }); };
+    var n = alarmGroups((L.alarms || []).filter(function (a) { return !a.seen_at; })).length;
+    if (n) add('warn', n === 1 ? '1 alarm to look at' : n + ' alarms to look at', 'home', 'alarms');
+    // A read that was refused is never taken for "nothing": it says so, and
+    // the line goes to its place, where Refresh is in reach (after the skeptic).
+    var R = S.reports;
+    if (S.listStale) add('warn', 'The list could not be read again · tap Refresh', 'home', 'alarms');
+    if (R && ((R.failed && !R.missing) || R.stale)) add('warn', 'Reports could not be read · tap Refresh', 'home', 'reports');
+    var w = reportsWaiting();
+    if (w.open) add(w.late ? 'bad' : 'warn', (w.open === 1 ? '1 report to look at' : w.open + ' reports to look at') + (w.late ? ' · ' + w.late + ' over a day' : ''), 'home', 'reports');
+    var due = (L.followups || []).filter(function (f) { return daysUntil(f.check_on) <= 0; });
+    var late = due.filter(function (f) { return daysUntil(f.check_on) < 0; }).length;
+    if (due.length) add(late ? 'bad' : 'warn', (due.length === 1 ? '1 follow-up to chase' : due.length + ' follow-ups to chase') + (late ? ' · ' + late + ' late' : ' today'), 'list', 'follow');
+    var m = L.money || {}, split = !!(m.anthropic || m.openai);
+    PROVIDERS.forEach(function (p) {
+      var a = split ? m[p.id] : (p.id === 'anthropic' ? m : null);
+      if (!a || a.recorded_usd === null || a.recorded_usd === undefined) return;
+      var left = Math.max(0, Number(a.remaining_usd));
+      if (left <= 0) add('bad', p.name + ' balance is empty', 'home', 'money');
+      else if (a.low) add('warn', p.name + ' balance is low' + (daysPhrase(a.days_left) ? ' · ' + daysPhrase(a.days_left) + ' left' : ''), 'home', 'money');
+    });
+    if (m.tripwire_passed) add('bad', 'Today’s spend passed your tripwire: ' + usd(m.today_usd || 0) + ' of ' + usd(m.tripwire_usd || 0), 'home', 'money');
+    if (S.people && ((S.people.failed && !S.people.missing) || S.people.stale)) add('warn', 'People could not be read · tap Refresh', 'people', 'people');
+    if (S.coupons && S.coupons.stale && S.people && S.people.people) add('warn', 'Coupons could not be read · tap Refresh', 'people', 'people');
+    var P = S.people && S.people.people ? S.people.people : null;
+    if (P) {
+      var today = text(S.people.today), slip = 0, hold = 0;
+      P.forEach(function (p) { var s = personStatus(p, today); if (s === 'slipping') slip++; if (s === 'blocked') hold++; });
+      var bits = [];
+      if (slip) bits.push(slip === 1 ? '1 person slipping' : slip + ' people slipping');
+      if (hold) bits.push(hold + ' with texts on hold');
+      if (bits.length) add('warn', bits.join(' · '), 'people', 'people');
+    }
+    var B = S.builds && S.builds.data && S.builds.data.builds;
+    if (B && B.length) {
+      var open = (B[0].lines || []).filter(function (l) { return l.state !== 'tried' && l.state !== 'not_right'; }).length;
+      if (open) add('', 'Build ' + text(B[0].build) + ': ' + (open === 1 ? '1 thing to try' : open + ' things to try'), 'builds', 'builds');
+    }
+    return out;
+  }
+  function viewNeeds() {
+    var lines = needsLines(), m = (S.list && S.list.money) || {};
+    var urgent = lines.filter(function (x) { return x.tone; }).length;
+    // Spend against the tripwire, always, as a calm last line (unless it has passed: then it is a line above).
+    var spend = m.tripwire_passed ? null : { tone: '', words: 'Spent today ' + usd(m.today_usd || 0) + (m.tripwire_usd === null || m.tripwire_usd === undefined ? ' · tripwire off' : ' of your ' + usd(m.tripwire_usd) + ' tripwire'), tab: 'home', to: 'money' };
+    var all = spend ? lines.concat([spend]) : lines;
+    // NEVER CALM OVER A READ STILL ON ITS WAY (after the skeptic): while the
+    // reports or the people are being read, it says so; "Nothing right now"
+    // only once everything it counts has been read.
+    var out = [];
+    if (!S.reports) out.push('the reports');
+    if (!S.people) out.push('the people');
+    var reading = out.length ? 'Still reading ' + out.join(' and ') + '.' : '';
+    return '<section class="card needs' + (urgent ? ' verdict' : '') + '"' + (reading ? ' aria-busy="true"' : '') + '><h2 class="card-title">Needs you</h2>' +
+      (urgent ? '' : reading ? '<p class="stat calm">Still reading</p>' : '<p class="stat calm">Nothing right now</p>') +
+      '<div class="list">' + all.map(function (x) {
+        return '<button class="row" data-act="goto" data-id="' + esc(x.tab) + '" data-to="' + esc(x.to) + '"><i class="dot' + (x.tone === 'bad' ? ' s-blocked' : x.tone === 'warn' ? ' s-slipping' : ' s-steady') + '"></i>' +
+          '<span class="grow"><b>' + esc(x.words) + '</b></span><i class="chev"></i></button>';
+      }).join('') + '</div>' + (reading ? '<p class="fine center">' + esc(reading) + ' More may show here.</p>' : '') + '</section>';
+  }
+  // A place a Needs-you line can take him to.
+  var anchor = function (id) { return '<span class="anchor" id="to-' + id + '"></span>'; };
   // TODAY: what needs him now. Alarms, reports from the team chats, the AI balance.
-  function viewHome() { return viewToday() + viewReports() + viewMoney(); }
+  function viewHome() { return viewNeeds() + anchor('alarms') + viewToday() + anchor('reports') + viewReports() + anchor('money') + viewMoney(); }
   // PEOPLE: what he hands a tester first, side by side (a practice number for
   // going through the app as a new person, a coupon, the invite), then
   // everyone. The tools stay at the top however long the list of people grows.
   function viewPeopleTab() {
     var testers = viewPractice() + viewCoupons() + viewInvite();
-    return (testers ? '<h1 class="day">For testers</h1>' + testers + '<h1 class="day">Everyone</h1>' : '') + viewPeople();
+    return (testers ? '<h1 class="day">For testers</h1>' + testers + anchor('people') + '<h1 class="day">Everyone</h1>' : anchor('people')) + viewPeople();
   }
 
   /* ---------- what a sheet holds ---------- */
@@ -1629,6 +1842,7 @@
     if (top.kind === 'follow' && $('#ft')) top.draft = { title: val('#ft'), waiting_on: val('#fwho'), check_on: val('#fdate'), note: val('#fnote') };
     if (top.kind === 'cmake' && $('#clabel')) { top.label = val('#clabel'); top.who = val('#cfor'); }
     if (top.kind === 'coupon' && $('#cnote')) top.note = val('#cnote');
+    if (top.kind === 'mreport' && $('#mnote')) top.note = val('#mnote');
     return top;
   }
 
@@ -2043,6 +2257,41 @@
         '<p class="fine center">This opening is on the record. The words are not kept on this device.</p>' +
         '<button class="btn wide" data-act="close">Close</button></div>' };
     },
+    // ONE REPORT FROM THE REST OF THE QUEUE (Nov 13 2026). Everything here
+    // came with the list: there are no words to ask for. Open, it is marked
+    // REVIEWED, KEPT or ACTION TAKEN, with his note of what he did.
+    mreport: function (a) {
+      var x = mreportOf(a.id);
+      if (!x) return null;
+      var kv = function (k, v) { return v === '' || v === null || v === undefined ? '' : '<div class="kv"><span>' + esc(k) + '</span><b>' + esc(v) + '</b></div>'; };
+      var P = S.people, person = x.about_id && P && P.people ? P.people.filter(function (p) { return p.id === x.about_id; })[0] : null;
+      var facts = kv('Kind', MEMBER_KINDS[x.kind] || 'Report') + kv('Team', x.team) + kv('Reported by', x.by) + kv('About', x.about) +
+        kv('Reported', when(x.at)) + (x.blocked ? kv('Blocked', 'Yes, they blocked them too') : '') +
+        (x.reviewed_at ? kv('Reviewed', day(new Date(x.reviewed_at))) + kv('What you did', OUTCOMES[x.outcome] || 'Reviewed') : kv('Waiting', waited(x.at)));
+      var words = x.kind === 'group_text'
+        ? (x.has_words ? 'A group-text report keeps the reporter\u2019s note and the messages before it. This page does not show them: the privacy policy does not say yet that they are read here. They were in the email to support when the report came in.'
+          : 'This group-text report kept no words.')
+        : x.kind === 'chat' ? 'A team chat report whose copy of the message was not kept, so there are no words to read.'
+        : 'A report on a teammate carries no words: only the reason, and whether they blocked them too.';
+      // Marked somewhere else while he typed: what he wrote stays in view
+      // (memory only, on this sheet's entry), so nothing typed is lost.
+      var unsaved = x.reviewed_at && a.unsaved ? '<div class="box"><span class="micro">What you wrote (not saved)</span><p class="pre">' + esc(a.unsaved) + '</p></div>' +
+        '<p class="fine center">This report was marked somewhere else first, so your marking was not saved.</p>' : '';
+      var body = x.reviewed_at
+        ? (x.note ? '<div class="box"><span class="micro">Your note</span><p class="pre">' + esc(x.note) + '</p></div>' : '') + unsaved
+        : '<label class="field" for="mnote"><span class="micro muted">What you did (needed for Action taken)</span><textarea class="well" id="mnote" maxlength="300" placeholder="A name is enough. No phone numbers or emails.">' + esc(a.note || '') + '</textarea></label>' +
+          '<div class="three"><button class="btn" data-act="mmark" data-id="' + esc(x.id) + '" data-outcome="reviewed">Reviewed</button>' +
+          '<button class="btn" data-act="mmark" data-id="' + esc(x.id) + '" data-outcome="kept">Kept</button>' +
+          '<button class="btn amber" data-act="mmark" data-id="' + esc(x.id) + '" data-outcome="acted">Action taken</button></div>' +
+          '<p class="fine center">Reviewed: nothing to do. Kept: it can stay. Action taken: you did something, so say what. Each marking is recorded; your note stays with the report.</p>';
+      var who = person && !x.reviewed_at ? '<button class="btn wide" data-act="person" data-id="' + esc(person.id) + '">Open ' + esc(personName(person)) + ' on People</button>' +
+        '<p class="fine center">To stop them using the app, pause their account there. Nothing is deleted, and you can bring them back.</p>' : '';
+      return { full: true, html: '<div class="sheet swap" role="dialog" aria-modal="true" aria-label="Report">' +
+        '<h2 class="name">' + esc(reasonWord(x.reason)) + '</h2>' +
+        '<div class="chips"><span class="chip">' + esc(MEMBER_KINDS[x.kind] || 'Report') + '</span>' + (x.reviewed_at ? '<span class="chip">' + esc(OUTCOME_CHIPS[x.outcome] || 'Reviewed') + '</span>' : '<span class="chip warn">Open</span>') + lateChip(x) + '</div>' +
+        '<div class="list">' + facts + '</div><p class="fine center">' + esc(words) + '</p>' + who + body +
+        '<button class="btn wide" data-act="close">Close</button></div>' };
+    },
     // Asked before a hide or a return: what it does, in plain words.
     rhide: function (a) {
       if (!(S.rshow && S.rshow.id === a.id && S.rshow.data)) return null;
@@ -2066,6 +2315,27 @@
         '<button class="btn red wide" data-act="signoutgo" data-all="1">Sign out of every device</button>') };
     }
   };
+  function toTop() { if (window.scrollTo) { try { window.scrollTo(0, 0); } catch (e) { /* stays where it is */ } } }
+  // Scroll to a place a Needs-you line names. false when the tab has no such place.
+  var selfScrollAt = 0, AIM_GLIDE_MS = 1500;   // when the page last scrolled itself to a place
+  function aimAt(to) {
+    var place = $('#to-' + to);
+    if (!place || !place.scrollIntoView) return false;
+    selfScrollAt = Date.now();
+    try { place.scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth', block: 'start' }); } catch (e) { place.scrollIntoView(); }
+    return true;
+  }
+  // The place a Needs-you tap went to, followed again at each redraw until
+  // every call that was out at the tap has landed (at most AIM_MS), so a
+  // card that lands late and moves it is followed. A tap, a finger, a wheel
+  // or a scrolling key of his ends it. Memory only.
+  var aim = null, AIM_MS = 8000;
+  function aimAgain() {
+    if (!aim) return;
+    if (Date.now() > aim.until || S.stage !== 'list' || stack.length) { aim = null; return; }
+    aimAt(aim.to);
+    if (!callsOut) aim = null;
+  }
   var leaveTimer = null;
   function drawSheet() {
     var root = $('#sheet');
@@ -2118,19 +2388,53 @@
   /* ---------- drawing ---------- */
   function drawPage() {
     var v = $('#view'), asof = $('#asof'), fresh = $('#refresh');
+    // A read that lands while he types in a find box draws the page again:
+    // the box keeps its words, its place and the keyboard.
+    var act = document.activeElement, keep = act && (act.id === 'pfind' || act.id === 'ifind') ? { id: act.id, at: act.selectionStart } : null;
     fresh.hidden = S.stage !== 'list';
-    asof.textContent = S.stage === 'list' && S.asOf ? 'As of ' + clock(S.asOf) : 'Private';
-    if (S.stage === 'opening') v.innerHTML = '<p class="fine center">Opening.</p>';
-    else if (S.stage === 'offline') v.innerHTML = '<section class="card"><h1 class="card-title">No connection</h1><p class="fine center">The list could not be reached. Nothing is lost: it is kept in the database.</p><button class="btn wide" data-act="reload">Try again</button></section>';
+    asof.textContent = S.stage === 'list' && S.asOf ? 'Updated ' + when(S.asOf).replace(/^(Today|Yesterday)/, function (w) { return w.toLowerCase(); }) + (refused().length ? ' · some could not be read' : '') : 'Private';
+    if (S.stage === 'opening') v.innerHTML = '<p class="fine center">Opening your page.</p>';
+    else if (S.stage === 'offline') v.innerHTML = '<section class="card"><h1 class="card-title">No connection</h1><p class="fine center">The page could not reach CountAble. Check your signal or Wi-Fi, then tap Try again. Nothing is lost: it is all kept in the database.</p><button class="btn wide" data-act="reload">Try again</button></section>';
     else if (S.stage === 'notowner') v.innerHTML = '<section class="card"><h1 class="card-title">Not the owner</h1><p class="fine center">This page opens only for the owner of CountAble. The account you signed in with is not it.</p><button class="btn wide" data-act="signoutgo">Sign out</button></section>';
     else if (S.stage === 'second') v.innerHTML = viewSecond();
-    else if (S.stage === 'list' && S.list) v.innerHTML = viewTabs() + (S.tab === 'coach' ? viewCoach() : isDocTab(S.tab) ? viewDocSwitch() + viewDoc(S.tab) : S.tab === 'builds' ? viewBuilds()
+    else if (S.stage === 'list' && S.list) v.innerHTML = viewTabs() + (S.listStale ? staleLine('list', S.asOf) : '') + (S.tab === 'coach' ? viewCoach() : isDocTab(S.tab) ? viewDocSwitch() + viewDoc(S.tab) : S.tab === 'builds' ? viewBuilds()
       : S.tab === 'people' ? viewPeopleTab() : S.tab === 'list' ? viewList() : viewHome()) + '<button class="link" data-act="signout">Sign out</button>';
     else v.innerHTML = viewSignIn();
+    // A read that just landed may have moved the place a Needs-you tap went to.
+    if (S.stage === 'list') aimAgain();
+    if (keep) {
+      var box = $('#' + keep.id);
+      if (box && box.focus) { try { box.focus({ preventScroll: true }); if (keep.at != null) box.setSelectionRange(keep.at, keep.at); } catch (e) { /* the box is still there, with its words */ } }
+    }
   }
 
   /* ---------- reading ---------- */
   var loading = null;
+  // The reads that rode with the last good read of the list (people and
+  // coupons, reports, and the open tab's own).
+  var rereads = Promise.resolve();
+  var OFF = 'This is not switched on yet.';   // a read the database does not have yet is not a refusal
+  // WHAT COULD NOT BE READ (after the second look): a read refused the first
+  // time, or refused AGAIN after a good one (kept on screen, marked stale).
+  // The top, Needs you and Refresh all ask this; nothing calm is said over it.
+  function refused() {
+    var out = [];
+    var bad = function (x, has) { return !!x && ((x.failed && !x.missing) || (x.stale && has)); };
+    if (S.listStale) out.push('the list');
+    if (bad(S.reports, S.reports && Array.isArray(S.reports.reports))) out.push('the reports');
+    if (bad(S.people, S.people && S.people.people)) out.push('the people');
+    if (bad(S.coupons, S.coupons && S.coupons.coupons) && S.people && S.people.people) out.push('the coupons');
+    if (S.tab === 'coach' && S.coach && S.coach.failed && S.coach.failed !== 'missing') out.push('the coach');
+    if (isDocTab(S.tab) && S.docs && S.docs.failed && S.docs.failed !== OFF) out.push('the documents');
+    if ((S.tab === 'builds' || S.tab === 'people') && S.builds && S.builds.failed && S.builds.failed !== OFF) out.push('the builds');
+    return out;
+  }
+  // "These are from the last good read, Today 8:05 AM": said in a card whose
+  // re-read was refused. A polite status, not an alert: the page draws it
+  // again at every redraw, and a reader is told it once, not at each.
+  function staleLine(what, at) {
+    return '<p class="msg-line warn" role="status">' + esc('The ' + what + ' could not be read again. These are from ' + (at ? when(at).replace(/^(Today|Yesterday)/, function (w) { return w.toLowerCase(); }) : 'the last good read') + '. Tap Refresh to try again.') + '</p>';
+  }
   function load(quiet) {
     // A read already in the air may have left before the last change landed:
     // wait for it, then read again.
@@ -2140,16 +2444,19 @@
       loading = null;
       if (mine !== gen) return r;              // signed out while this was in the air: draw nothing
       if (r.ok && r.data && r.data.sections) {
-        S.list = r.data; S.asOf = new Date(); S.stage = 'list';
-        loadPeople();
-        // The reports from the team chats, beside the people and never in the list's way.
-        loadReports();
+        S.list = r.data; S.asOf = new Date(); S.stage = 'list'; S.listStale = false;
+        // Every read that rides with the list, kept so Refresh can wait for
+        // them all before it says "Up to date" (after the second look).
+        var also = [loadPeople(),
+          // The reports from the team chats, beside the people and never in the list's way.
+          loadReports()];
         // The Coach tab is read again with the list while it is the one showing.
-        if (S.tab === 'coach' && !(S.coach && S.coach.loading)) loadCoach();
+        if (S.tab === 'coach' && !(S.coach && S.coach.loading)) also.push(loadCoach());
         // So are the documents, while one of them is the tab showing.
-        if (isDocTab(S.tab) && !(S.docs && S.docs.loading)) loadDocs();
+        if (isDocTab(S.tab) && !(S.docs && S.docs.loading)) also.push(loadDocs());
         // And the builds, while theirs is the tab showing (a mark comes back this way).
-        if ((S.tab === 'builds' || S.tab === 'people') && !(S.builds && S.builds.loading)) loadBuilds();
+        if ((S.tab === 'builds' || S.tab === 'people') && !(S.builds && S.builds.loading)) also.push(loadBuilds());
+        rereads = Promise.all(also);
         // Typing that was kept across a sign-out comes back.
         if (S.pending) { var kept = S.pending; S.pending = null; stack.length = 0; stack.push(kept); drawSheet(); }
       } else if (r.status === 401) {
@@ -2162,8 +2469,11 @@
         S.list = null; S.stage = 'notowner'; stack.length = 0; drawSheet();
       } else if (!S.list) {
         S.stage = 'offline';
-      } else if (!quiet) {
-        toast(why(r));
+      } else {
+        // The list could not be read AGAIN: what is shown stays, marked
+        // STALE until the next good read (the top and every tab say so).
+        S.listStale = true;
+        if (!quiet) toast(why(r));
       }
       drawPage();
       return r;
@@ -2317,12 +2627,23 @@
     },
     secondagain: function () { say(''); secondStart(); },
     reload: function () { S.stage = 'opening'; drawPage(); load(); },
-    refresh: function () { if (S.coach) S.coach.stale = true; load().then(function (r) { if (r.ok) toast('Up to date'); }); },
+    // Refresh says "Up to date" only once every read that rode with the list
+    // has landed and none was refused; otherwise it says what could not be read.
+    refresh: function () {
+      if (S.coach) S.coach.stale = true;
+      load().then(function (r) {
+        if (!r.ok) return;
+        rereads.then(function () {
+          var no = refused();
+          toast(no.length ? 'Could not read ' + no.join(', ') + '. Tap Refresh to try again.' : 'Up to date');
+        });
+      });
+    },
     signout: function () { openSheet('signout'); },
     signoutgo: function (d) {
       var token = session && session.access_token, everywhere = !!(d && d.all);
       gen++;                                   // every call still in the air is now too late to matter
-      keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); forgetBuilds(); S.tab = 'home'; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
+      keepSession(null); S.list = null; S.people = null; forgetTexts(); forgetCoach(); forgetTrace(); forgetCoachTab(); forgetDocs(); forgetReports(); forgetBuilds(); forgetFinds(); S.tab = 'home'; S.phone = ''; S.pending = null; S.busy = false; S.stage = 'signin'; say('');
       stack.length = 0; drawSheet(); drawPage();
       if (!token) return;
       // First the database forgets that this sign-in passed (or, for every
@@ -2349,8 +2670,12 @@
       if (!top || top.kind !== 'item') return;
       var v = top.draft, body = v.body.trim();
       if (!body) { toast('Type the item first'); return; }
+      // An item he has just saved is never hidden by the find box: the box
+      // clears, and the note says so (after the skeptic).
+      var finding = !!text(S.ifind).trim();
       save(el, top, 'owner_item_save', { _id: top.id || top.newId, _section: v.section, _body: body, _detail: v.detail.trim() || null, _seen: top.id ? top.orig.seen : null, _create: !top.id },
-        top.id ? 'Item changed' : 'Item added', function () { S.sec[v.section] = true; writeStore(OPEN, JSON.stringify(S.sec)); });
+        (top.id ? 'Item changed' : 'Item added') + (finding ? '. Find cleared, so you can see it' : ''),
+        function () { S.sec[v.section] = true; writeStore(OPEN, JSON.stringify(S.sec)); if (finding) S.ifind = ''; });
     },
     // The question is laid over the sheet; what is in the sheet is kept first,
     // so Cancel gives it back as it was.
@@ -2530,15 +2855,47 @@
       change(el, 'owner_chat_message_hide', { _report: d.id, _hide: on }, on ? 'Hidden for everyone' : 'Brought back', closeAll);
     },
     rkeep: function (d, el) { if (d.id) change(el, 'owner_chat_report_keep', { _report: d.id }, 'Kept, and marked reviewed', closeAll); },
+    // The rest of the queue. Marking sends when this page read the list: a
+    // report marked somewhere else since then is refused, read again, and
+    // shown as it now is (his note stays in the open sheet).
+    mreport: function (d) { if (d.id) openSheet('mreport', { id: d.id, note: '' }); },
+    mmark: function (d, el) {
+      var top = capture(), x = d.id ? mreportOf(d.id) : null;
+      if (!x || x.reviewed_at || !top || top.kind !== 'mreport' || !Object.prototype.hasOwnProperty.call(MARKED, d.outcome)) return;
+      var note = text(top.note).trim();
+      if (d.outcome === 'acted' && !note) { toast('Say in a few words what you did'); return; }
+      change(el, 'owner_member_report_keep', { _report: d.id, _outcome: d.outcome, _note: note || null, _seen: (S.reports && S.reports.as_of) || null },
+        MARKED[d.outcome], closeAll, function () {
+          // Marked somewhere else first: never sent again. What he wrote is
+          // kept on the open sheet's entry and shown as not saved.
+          var t = stack.length ? stack[stack.length - 1] : null;
+          if (t && t.kind === 'mreport' && t.id === d.id && note) { t.unsaved = note; drawSheet(); }
+          return null;
+        });
+    },
 
     // The tabs. The Coach tab's two reads, and the documents' one, are asked
     // for here, when the tab is opened.
     tab: function (d) {
+      var was = S.tab;
       S.tab = TAB_IDS.indexOf(d.id) >= 0 ? d.id : 'home';
       if (S.tab === 'coach' && !(S.coach && (S.coach.data || S.coach.loading))) loadCoach();
       else if (isDocTab(S.tab) && !(S.docs && (S.docs.data || S.docs.loading))) loadDocs();
       else if ((S.tab === 'builds' || S.tab === 'people') && !(S.builds && (S.builds.data || S.builds.loading))) loadBuilds();
       else drawPage();
+      // Another tab starts at its own top (Nov 13 2026), never part-way down.
+      if (was !== S.tab && !d.to) toTop();
+    },
+    // A line of Needs you: to its tab, then to its place there. A follow-up
+    // that is due opens, so its buttons are in reach.
+    goto: function (d) {
+      if (d.to === 'follow' && S.list) (S.list.followups || []).forEach(function (f) { if (daysUntil(f.check_on) <= 0) S.fopen[f.id] = true; });
+      ACT.tab({ id: d.id, to: d.to });
+      // A line with no place of its own (Builds) opens its tab at the top.
+      // A read that lands within a few seconds and moves the place is
+      // followed once (aimAgain), unless a finger has moved the page since.
+      if (!aimAt(d.to)) { aim = null; toTop(); return; }
+      aim = callsOut ? { to: d.to, until: Date.now() + AIM_MS } : null;
     },
     // A build folded open or shut, as a section of the list is.
     bopen: function (d, el) {
@@ -2666,6 +3023,7 @@
 
   document.addEventListener('click', function (e) {
     var el = e.target.closest ? e.target.closest('[data-act]') : null;
+    aim = null;                                // any tap of his own ends a Needs-you follow
     if (el) { if (el.disabled) return; var fn = ACT[el.dataset.act]; if (fn) fn(el.dataset, el); return; }
     // A tap on the dimmed page closes a question, never a sheet with typing in it.
     if (e.target.hasAttribute && e.target.hasAttribute('data-veil') && !e.target.querySelector('input,textarea,select')) closeSheet();
@@ -2675,6 +3033,21 @@
   // sheet's entry and nowhere else.
   document.addEventListener('input', function (e) {
     var top = stack.length ? stack[stack.length - 1] : null;
+    // The find boxes (people, open items): only the matches are drawn again,
+    // in place, so the box keeps the keyboard. Memory only.
+    if (e.target && e.target.id === 'pfind') {
+      S.pfind = String(e.target.value || '');
+      var pl = $('#plist'); if (pl && lastPeople) pl.innerHTML = peopleFound(lastPeople.rows, lastPeople.row);
+      return;
+    }
+    if (e.target && e.target.id === 'ifind') {
+      S.ifind = String(e.target.value || '');
+      var found = $('#ifound'); if (found && S.list) found.innerHTML = text(S.ifind).trim() ? itemsFound() : '<div class="sugs">' + itemGroups() + '</div>';
+      return;
+    }
+    // His note on a report: kept on the open sheet's entry at each key, so a
+    // fresh read of the reports that draws the sheet again keeps it.
+    if (e.target && e.target.id === 'mnote' && top && top.kind === 'mreport') { top.note = String(e.target.value || ''); return; }
     if (!e.target || e.target.id !== 'cnote' || !top || top.kind !== 'coupon') return;
     var c = couponOf(top.id) || top.fresh, code = S.cshow && c && S.cshow.id === c.id && S.cshow.data ? text(S.cshow.data.code) : '';
     if (!c || !code) return;
@@ -2684,10 +3057,20 @@
     if (link) link.setAttribute('href', smsLink(msg));
   });
   document.addEventListener('keydown', function (e) {
+    // A key that scrolls the page is his: it ends a Needs-you follow.
+    if (/^(ArrowUp|ArrowDown|PageUp|PageDown|Home|End| |Spacebar)$/.test(e.key || '')) aim = null;
     if (e.key === 'Enter' && e.target && e.target.id === 'phone') { e.preventDefault(); ACT.start(); }
     if (e.key === 'Enter' && e.target && e.target.id === 'code') { e.preventDefault(); ACT.verify(); }
     if (e.key === 'Enter' && e.target && e.target.id === 'scode') { e.preventDefault(); ACT.secondgo(); }
+    // Done typing in a find box: the keyboard goes, the matches stay.
+    if (e.key === 'Enter' && e.target && (e.target.id === 'pfind' || e.target.id === 'ifind') && e.target.blur) { e.preventDefault(); e.target.blur(); }
   });
+  // A finger or a wheel moving the page ends a Needs-you follow: the page is his.
+  document.addEventListener('touchmove', function () { aim = null; }, { passive: true });
+  // So does any scroll the page did not make itself (a dragged scrollbar,
+  // VoiceOver): the page's own glide to a place is let through for AIM_GLIDE_MS.
+  if (window.addEventListener) window.addEventListener('scroll', function () { if (aim && Date.now() - selfScrollAt > AIM_GLIDE_MS) aim = null; }, { passive: true });
+  document.addEventListener('wheel', function () { aim = null; }, { passive: true });
   // Coming back to the page: read the list again, unless something is being typed.
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState !== 'visible' || S.stage !== 'list' || stack.length || S.busy) return;
