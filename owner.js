@@ -2250,9 +2250,11 @@
           (reviewed ? '' : '<button class="btn wide" data-act="rkeep" data-id="' + esc(a.id) + '">Keep it</button>' +
             '<p class="fine center">Keep it marks the report reviewed and leaves the message where it is.</p>');
       }
+      // Matches its row (see the member-report sheet below): a late open report shows OVER A DAY alone (owner, Nov 13 2026: "Yes, the sheet says OVER A DAY alone."); lateness is worked out once per draw.
+      var late = overDay({ at: at, reviewed_at: reviewed });
       return { full: true, html: '<div class="sheet swap" role="dialog" aria-modal="true" aria-label="Report">' +
         '<h2 class="name">' + esc(reasonWord((D && D.reason) || (q && q.reason))) + '</h2>' +
-        '<div class="chips"><span class="chip' + (st === 'hidden' ? ' on' : '') + '">' + esc(REPORT_CHIPS[st] || text(st)) + '</span>' + (reviewed ? '<span class="chip">Reviewed</span>' : '<span class="chip warn">Open</span>') + '</div>' +
+        '<div class="chips"><span class="chip' + (st === 'hidden' ? ' on' : '') + '">' + esc(REPORT_CHIPS[st] || text(st)) + '</span>' + (reviewed ? '<span class="chip">Reviewed</span>' : late ? '<span class="chip bad">Over a day</span>' : '<span class="chip warn">Open</span>') + '</div>' +
         '<div class="list">' + facts + '</div>' + body +
         '<p class="fine center">This opening is on the record. The words are not kept on this device.</p>' +
         '<button class="btn wide" data-act="close">Close</button></div>' };
@@ -2286,9 +2288,12 @@
           '<p class="fine center">Reviewed: nothing to do. Kept: it can stay. Action taken: you did something, so say what. Each marking is recorded; your note stays with the report.</p>';
       var who = person && !x.reviewed_at ? '<button class="btn wide" data-act="person" data-id="' + esc(person.id) + '">Open ' + esc(personName(person)) + ' on People</button>' +
         '<p class="fine center">To stop them using the app, pause their account there. Nothing is deleted, and you can bring them back.</p>' : '';
+      // Both report sheets match their rows: a late open report shows OVER A DAY alone (owner, Nov 13 2026: "Yes, the sheet says OVER A DAY alone.").
+      // Lateness is worked out once per draw, so the clock is never read twice across the 24-hour mark.
+      var late = overDay(x);
       return { full: true, html: '<div class="sheet swap" role="dialog" aria-modal="true" aria-label="Report">' +
         '<h2 class="name">' + esc(reasonWord(x.reason)) + '</h2>' +
-        '<div class="chips"><span class="chip">' + esc(MEMBER_KINDS[x.kind] || 'Report') + '</span>' + (x.reviewed_at ? '<span class="chip">' + esc(OUTCOME_CHIPS[x.outcome] || 'Reviewed') + '</span>' : '<span class="chip warn">Open</span>') + lateChip(x) + '</div>' +
+        '<div class="chips"><span class="chip">' + esc(MEMBER_KINDS[x.kind] || 'Report') + '</span>' + (x.reviewed_at ? '<span class="chip">' + esc(OUTCOME_CHIPS[x.outcome] || 'Reviewed') + '</span>' : late ? '<span class="chip bad">Over a day</span>' : '<span class="chip warn">Open</span>') + '</div>' +
         '<div class="list">' + facts + '</div><p class="fine center">' + esc(words) + '</p>' + who + body +
         '<button class="btn wide" data-act="close">Close</button></div>' };
     },
